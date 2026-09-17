@@ -4,7 +4,7 @@
   "short_name": "יוטיוב פרימיום",
   "author": "צול גאה – TSOOLGEE.UK",
   "homepage_url": "https://tsoolgee.uk",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "description": "חוויית YouTube Premium: בלי פרסומות, ניגון ברקע, הורדות (גם דרך שרת Drive), חלון צף, איכות מרבית ומהירויות עד פי 4.",
   "minimum_chrome_version": "111",
   "permissions": ["storage", "tabs", "notifications", "alarms", "cookies"],

@@ -76,12 +76,12 @@ test('api: retry על דף שגיאה של גוגל, ואז הצלחה', async (
   assert.strictEqual(f.calls.length, 3);
 });
 
-test('api: אחרי 3 כישלונות BAD_RESPONSE', async () => {
-  const f = mockFetch([res(200, 'x'), res(200, 'x'), res(200, 'x')]);
+test('api: אחרי 6 כישלונות BAD_RESPONSE', async () => {
+  const f = mockFetch(Array.from({ length: 6 }, () => res(200, 'x')));
   const { DriveClient } = load(f);
   const r = await DriveClient.api(RELAY, '/queue');
   assert.strictEqual(r.error.code, 'BAD_RESPONSE');
-  assert.strictEqual(f.calls.length, 3);
+  assert.strictEqual(f.calls.length, 6);
 });
 
 test('api: 418 נטפרי → CLIENT_BLOCKED בלי retry', async () => {

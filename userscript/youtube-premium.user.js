@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      2.1.3
+// @version      2.1.4
 // @description  בלי פרסומות, ניגון ברקע, הורדת סרטונים (גם דרך שרת Drive), חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -163,12 +163,15 @@
       return err('BAD_RESPONSE', 'תשובה לא צפויה מהשרת (' + res.status + ')');
     }
 
-    // גוגל מחזיר לפעמים דף שגיאה חד-פעמי במקום תשובת הסקריפט – מנסים שוב עד פעמיים
+    // גוגל מחזיר לא מעט פעמים דף שגיאה ("לא ניתן לפתוח את הקובץ כרגע") במקום תשובת הסקריפט,
+    // גם כשהבקשה כבר הגיעה לשרת. /download בטוח לשליחה חוזרת (השרת מחזיר את אותו קובץ מהמטמון),
+    // אז מנסים שוב כמה פעמים עם המתנה הולכת וגדלה לפני שמוותרים.
+    client.attempts = 6;
     client.api = async function api(settings, path, body) {
-      for (let attempt = 0; ; attempt++) {
+      for (let attempt = 1; ; attempt++) {
         const r = await apiOnce(settings, path, body);
-        if (!r.error || r.error.code !== 'BAD_RESPONSE' || attempt >= 2) return r;
-        await new Promise(done => setTimeout(done, client.retryDelay));
+        if (!r.error || r.error.code !== 'BAD_RESPONSE' || attempt >= client.attempts) return r;
+        await new Promise(done => setTimeout(done, client.retryDelay * attempt));
       }
     };
 
