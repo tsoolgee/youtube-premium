@@ -25,6 +25,10 @@ BUNDLE = [
     "features/pip.js",
     "features/quality.js",
     "features/speed.js",
+    # vendor נטען לפני mp3.js שמשתמש בו. lame.min.js הוא LGPL-3.0 – נשמר
+    # כקובץ נפרד ומיוחס ב-README (lame.sourceforge.net).
+    "vendor/lame.min.js",
+    "mp3.js",
     "features/download.js",
     "features/official-button.js",
     "features/panel.js",

@@ -31,6 +31,7 @@ ap.add_argument("--shorts", action="store_true")
 ap.add_argument("--mobile", action="store_true")
 ap.add_argument("--width", type=int, default=360)
 ap.add_argument("--prefix", default="")
+ap.add_argument("--pick", default="", help="regex של השורה בדיאלוג (למשל MP3); ברירת מחדל: שמע בלבד")
 A = ap.parse_args()
 
 report = {"video": A.video, "steps": []}
@@ -211,17 +212,18 @@ async def main():
             await page.screenshot(path=str(OUT / (A.prefix + "04-download-dialog.png")))
             step("download-dialog", **(await page.evaluate(DIALOG_JS)))
             if not A.skip_download:
-                clicked = await page.evaluate("""() => {
+                clicked = await page.evaluate("""PICK => {
                   const roots = [document];
                   for (let i = 0; i < roots.length; i++) for (const e of roots[i].querySelectorAll('*')) if (e.shadowRoot) roots.push(e.shadowRoot);
+                  const want = new RegExp(PICK || 'שמע בלבד$|audio only$', 'i');
                   for (const r of roots) {
                     const opts = [...r.querySelectorAll('[role=radio], input[type=radio], label, [role=option]')];
-                    const audio = opts.find(x => /שמע|audio/i.test((x.textContent || '') + (x.value || '') + (x.getAttribute('aria-label') || '')));
+                    const audio = opts.find(x => want.test(((x.textContent || '') + ' ' + (x.value || '') + ' ' + (x.getAttribute('aria-label') || '')).replace(/\s+/g, ' ').trim()));
                     const go = [...r.querySelectorAll('button, [role=button]')].find(b => /^\\s*(הורדה|download)\\s*$/i.test(b.textContent));
                     if (audio && go) { audio.click(); go.click(); return true; }
                   }
                   return false;
-                }""")
+                }""", A.pick)
                 step("download-start", clicked=clicked)
                 if clicked:
                     try:

@@ -72,6 +72,10 @@ window.fetch = async (url, opts) => {
       adPlacements: [1], playerAds: [1],
       videoDetails: { title: 'Me at the zoo: test/1', lengthSeconds: '19' },
       streamingData: { adaptiveFormats: [
+        // איכויות נוספות (מצביעות לאותו קובץ 240p) – כדי לבדוק את רשימת כל האפשרויות בדיאלוג
+        f(137, 'video/mp4; codecs="avc1.640028"', 3223790, { height: 1080, fps: 60, qualityLabel: '1080p60' }),
+        f(136, 'video/mp4; codecs="avc1.4d401f"', 1611895, { height: 720, fps: 30, qualityLabel: '720p' }),
+        f(135, 'video/mp4; codecs="avc1.4d401e"', 805947, { height: 480, fps: 30, qualityLabel: '480p' }),
         f(134, 'video/mp4; codecs="avc1.4d400c"', 322379, { height: 240, qualityLabel: '240p' }),
         f(395, 'video/mp4; codecs="av01.0.00M.08"', 322379, { height: 240, qualityLabel: '240p' }),
         f(140, 'audio/mp4; codecs="mp4a.40.2"', 309288, {}),

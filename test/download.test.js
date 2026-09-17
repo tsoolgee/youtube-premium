@@ -1,10 +1,12 @@
 // בדיקות ללוגיקת ההורדה מתוך download.js בלי DOM: node test/download.test.js
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
-const src = fs.readFileSync(__dirname + '/../src/features/download.js', 'utf8');
+// אותו סדר כמו ב-build.py: lame (vendor) → mp3.js → download.js
+const src = ['/../src/vendor/lame.min.js', '/../src/mp3.js', '/../src/features/download.js']
+  .map(f => fs.readFileSync(__dirname + f, 'utf8')).join(';\n');
 const noop = () => {};
 const store = {};
 const ctx = {
-  S: { download: true }, SITE: 'www', console, URL, Blob, DOMException, AbortController, Uint8Array, Promise, JSON, Math, Date, Map, Set, WeakMap,
+  S: { download: true }, SITE: 'www', console, URL, Blob, DOMException, AbortController, Uint8Array, Int8Array, Int16Array, Int32Array, Float32Array, Promise, JSON, Math, Date, Map, Set, WeakMap, String,
   setTimeout, clearTimeout,
   sleep: ms => new Promise(r => setTimeout(r, Math.min(ms, 5))),
   localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
@@ -15,7 +17,7 @@ const ctx = {
   uiText: he => he, uiHebrew: () => true,
 };
 vm.createContext(ctx);
-vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, dlServerFailToast, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY });', ctx);
+vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, dlServerFailToast, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, dlServerQuality, id3, lamejs, toMp3, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText });', ctx);
 
 (async () => {
   // מדרגות הטבעת כמו updateProgress של יוטיוב
@@ -50,10 +52,10 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
     if (opts.signal.aborted) throw new DOMException('aborted', 'AbortError');
     return { ok: false, status: 403 };
   };
-  const total = 10 * 1024 * 1024 * 6; // 6 חלקים
+  const total = 4 * 1024 * 1024 * 6; // 6 חלקים (CHUNK = 4MB)
   await assert.rejects(ctx.fetchFile({ url: 'https://x/videoplayback?a=1', contentLength: String(total) }, noop, new AbortController().signal),
     e => e.expired === true && /403/.test(e.message));
-  assert(calls.length <= 3, 'לא יותר מבקשה אחת לכל worker: ' + calls.length);
+  assert(calls.length <= 4, 'לא יותר מבקשה אחת לכל worker (LANES=4): ' + calls.length);
   assert(calls.every(u => /&range=\d+-\d+$/.test(u)));
 
   // fetchFile: טווחים בדיוק עד סוף הקובץ, ו-5xx כן מנסים שוב
@@ -67,11 +69,11 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
     let sent = false;
     return { ok: true, body: { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: buf })) }) } };
   };
-  const size = 10 * 1024 * 1024 + 5;
+  const size = 4 * 1024 * 1024 * 2 + 5; // 3 חלקים של 4MB
   const out = await ctx.fetchFile({ url: 'https://x/videoplayback?a=1', contentLength: String(size) }, noop, new AbortController().signal);
   assert.strictEqual(out.length, size);
   assert(ranges.every(([, b]) => b <= size - 1));
-  assert.strictEqual(ranges.length, 3); // 2 חלקים + ניסיון חוזר אחד
+  assert.strictEqual(ranges.length, 4); // 3 חלקים + ניסיון חוזר אחד
 
   // הסרה מתפריט: מיד, וטוסט "ביטול" מחזיר את הרשומה
   let toast = null;
@@ -85,6 +87,47 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   toast.action.run();
   assert.deepStrictEqual(ctx.dlDoneList().map(x => x.id), ['aaaaaaaaaaa', 'bbbbbbbbbbb']);
   assert.strictEqual(ctx.dlRemoveNow('ccccccccccc'), false);
+
+  // MP3: אפשרות בדיאלוג, מיפוי לשרת, ותג ID3 עם כותרת בעברית
+  assert(ctx.DL_CHOICES.some(c => c.value === 'mp3' && c.mp3));
+  assert.strictEqual(ctx.dlIsAudio('mp3'), true);
+  assert.strictEqual(ctx.dlIsAudio('720'), false);
+  const sq = c => ctx.dlServerQuality(c).type + '/' + ctx.dlServerQuality(c).quality;
+  assert.strictEqual(sq('mp3'), 'audio/mp3');
+  assert.strictEqual(sq('audio'), 'audio/m4a');
+  assert.strictEqual(sq('720'), 'video/720');
+  const tag = ctx.id3('שיר', 'אמן');
+  assert.strictEqual(String.fromCharCode(tag[0], tag[1], tag[2]), 'ID3');
+  assert.strictEqual(tag[3], 3);
+  const tagSize = (tag[6] << 21) | (tag[7] << 14) | (tag[8] << 7) | tag[9];
+  assert.strictEqual(tagSize, tag.length - 10);
+  assert(tag.every(b => b !== undefined));
+  assert.strictEqual(typeof ctx.lamejs, 'function');
+  assert.strictEqual(typeof ctx.lamejs.Mp3Encoder, 'function');
+
+  // כל האפשרויות: שורה לכל איכות שיוטיוב מציע + M4A + MP3, עם שמות Premium לפריסטים
+  const vids = [
+    { height: 1080, fps: 60, mimeType: 'video/mp4; codecs="avc1"', contentLength: '900' },
+    { height: 720, fps: 30, mimeType: 'video/mp4; codecs="avc1"', contentLength: '500' },
+    { height: 480, fps: 30, mimeType: 'video/mp4; codecs="avc1"', contentLength: '300' },
+    { height: 144, fps: 15, mimeType: 'video/mp4; codecs="avc1"', contentLength: '90' },
+  ];
+  const info = { title: 't', author: 'a', length: 10, audio: { contentLength: '100' }, videos: vids };
+  const ch = ctx.dlChoices(info);
+  assert.strictEqual(ch.map(c => c.value).join(','), '1080,720,480,144,audio,mp3');
+  assert.strictEqual(ch[0].he, 'Full HD (1080p)');   // פריסט – השם של יוטיוב
+  assert.strictEqual(ch[2].he, '480p');              // לא פריסט – הגובה
+  assert.strictEqual(ctx.dlChoices(null), ctx.DL_CHOICES);
+  assert.strictEqual(ctx.dlSizeText(info, '480'), '400B');
+  assert.strictEqual(ctx.dlPickVideo(info, '480').height, 480);
+
+  // אין זיכרון → יורדים לאיכות הבאה שקיימת, ומהנמוכה אין לאן
+  ctx.dlInfoReady.set('abcdefghijk', info);
+  assert.strictEqual(ctx.dlLowerChoice('abcdefghijk', '1080'), '720');
+  assert.strictEqual(ctx.dlLowerChoice('abcdefghijk', '480'), '144');
+  assert.strictEqual(ctx.dlLowerChoice('abcdefghijk', '144'), null);
+  assert.strictEqual(ctx.dlLowerChoice('abcdefghijk', 'mp3'), null);
+  assert.strictEqual(ctx.dlLowerChoice('zzzzzzzzzzz', '1080'), null);
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });

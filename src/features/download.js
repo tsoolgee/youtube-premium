@@ -11,7 +11,11 @@ const CLIENT = {
   osVersion: '26.5.23O471',
   headerId: '101',
 };
-const CHUNK = 10 * 1024 * 1024;
+// חלקים קטנים: על חיבור מסונן (נטפרי) בקשות וידאו ארוכות נחתכות באקראי באמצע,
+// ואז יש פחות מה לחזור עליו. RETRIES = ניסיונות רצופים *בלי* התקדמות.
+const CHUNK = 4 * 1024 * 1024;
+const LANES = 4;
+const RETRIES = 8;
 
 async function fetchStreams(id, signal) {
   const headers = {
@@ -96,6 +100,7 @@ async function fetchFile(format, onBytes, signal) {
     for (let range; !stop.signal.aborted && (range = ranges.shift());) {
       let [pos, end] = range, tries = 0;
       while (pos <= end) {
+        const before = pos;
         try {
           const r = await fetch(`${format.url}&range=${pos}-${end}`, { signal: stop.signal, credentials: 'omit', cache: 'no-store' });
           if (!r.ok) {
@@ -117,14 +122,16 @@ async function fetchFile(format, onBytes, signal) {
           if (pos <= end) throw new Error(dlT('החיבור נקטע', 'The connection was interrupted'));
         } catch (e) {
           if (stop.signal.aborted) throw e;
-          if (e.fatal || ++tries > 4) { fatal = fatal || e; stop.abort(); throw e; }
-          await sleep(1000 * tries);
+          // כל עוד הבקשה הביאה בייטים חדשים – החיתוך לא "תקלה", רק המשך מכאן
+          tries = pos > before ? 0 : tries + 1;
+          if (e.fatal || tries > RETRIES) { fatal = fatal || e; stop.abort(); throw e; }
+          await sleep(300 * tries);
         }
       }
     }
   };
   try {
-    await Promise.all([worker(), worker(), worker()]);
+    await Promise.all(Array.from({ length: Math.min(LANES, ranges.length) }, worker));
   } catch (e) {
     throw signal.aborted ? e : fatal || e;
   } finally {
@@ -175,13 +182,35 @@ const DL_CHOICES = [
   { value: '360', he: 'בינונית (360p)', en: 'Medium (360p)', height: 360 },
   { value: '144', he: 'נמוכה (144p)', en: 'Low (144p)', height: 144 },
   { value: 'audio', he: 'שמע בלבד', en: 'Audio only', height: 0 },
+  { value: 'mp3', he: 'שמע בלבד (MP3)', en: 'Audio only (MP3)', height: 0, mp3: true },
 ];
 // ערכים מגרסה 2.1.0 (גבוהה 1080 / בינונית 720 / נמוכה 360)
 const DL_LEGACY_CHOICE = { high: '1080', medium: '720', low: '360' };
+const dlIsAudio = c => c === 'audio' || c === 'mp3';
 const dlNormChoice = v => {
   const x = DL_LEGACY_CHOICE[v] || String(v == null ? '' : v);
-  return DL_CHOICES.some(c => c.value === x) ? x : null;
+  if (DL_CHOICES.some(c => c.value === x)) return x;
+  // גם איכות שלא בסולם של Premium (144…2160) – הדיאלוג מציג את כל מה שיוטיוב מציע
+  return /^\d{2,4}$/.test(x) && +x >= 100 && +x <= 4320 ? x : null;
 };
+
+// כל האפשרויות שיש לסרטון הזה: גובה לכל איכות שיוטיוב מציע + שמע (M4A ו-MP3).
+// השמות של הפריסטים נשארים כמו אצל Premium; השאר "1080p60" וכו'.
+function dlChoices(info) {
+  if (!info || !info.videos || !info.videos.length) return DL_CHOICES;
+  const seen = new Map();
+  for (const v of info.videos) {
+    if (!v.height || seen.has(v.height)) continue;
+    const preset = DL_CHOICES.find(c => c.height === v.height);
+    const fps = v.fps > 30 ? String(Math.round(v.fps)) : '';
+    const label = preset ? null : v.height + 'p' + fps;
+    seen.set(v.height, preset
+      ? { ...preset }
+      : { value: String(v.height), he: label, en: label, height: v.height });
+  }
+  const videos = [...seen.values()].sort((a, b) => b.height - a.height);
+  return [...videos, ...DL_CHOICES.filter(c => !c.height)];
+}
 const DL_CHOICE_KEY = 'ytu-dl-choice';
 const DL_DONE_KEY = 'ytu-dl-done';
 const dlT = (he, en) => (typeof uiText === 'function' ? uiText(he, en) : he);
@@ -284,21 +313,28 @@ function dlMeta(id, info) {
   return m;
 }
 
+// הפרטים שכבר נטענו לסרטון (בלי await) – מה שההורדה עצמה קראה
+const dlInfoReady = new Map();
+const dlInfoNow = id => dlInfoReady.get(id) || null;
+
 function dlGetInfo(id) {
   let p = dlInfo.get(id);
   if (!p) {
     p = fetchStreams(id);
     dlInfo.set(id, p);
+    p.then(info => { if (dlInfo.get(id) === p) dlInfoReady.set(id, info); }, () => {});
     // תקלה לא נשמרת, וקישורי ההורדה פגים אחרי כמה שעות
     p.catch(() => { if (dlInfo.get(id) === p) dlInfo.delete(id); });
-    setTimeout(() => { if (dlInfo.get(id) === p) dlInfo.delete(id); }, 60 * 60 * 1000);
+    setTimeout(() => { if (dlInfo.get(id) === p) { dlInfo.delete(id); dlInfoReady.delete(id); } }, 60 * 60 * 1000);
   }
   return p;
 }
 
 // הפורמט לבחירה: הכי גבוה עד הגובה המבוקש; אם אין – הכי נמוך שיש
 function dlPickVideo(info, choice) {
-  const c = DL_CHOICES.find(x => x.value === dlNormChoice(choice));
+  const norm = dlNormChoice(choice);
+  const c = DL_CHOICES.find(x => x.value === norm)
+    || (/^\d+$/.test(String(norm)) ? { height: +norm } : null);
   if (!c || !c.height || !info.videos.length) return null;
   const avc = f => (/avc1/.test(f.mimeType) ? 1 : 0);
   const list = [...info.videos].sort((a, b) => b.height - a.height || avc(b) - avc(a));
@@ -308,7 +344,7 @@ function dlPickVideo(info, choice) {
 // הגודל המשוער בצד ימין של השורה (approximateSize)
 function dlSizeText(info, choice) {
   const size = f => +(f && f.contentLength) || 0;
-  if (choice === 'audio') return size(info.audio) ? mb(size(info.audio)) : '';
+  if (dlIsAudio(choice)) return size(info.audio) ? mb(size(info.audio)) : '';
   const v = dlPickVideo(info, choice);
   if (!v) return '';
   const n = size(v) + size(info.audio);
@@ -835,19 +871,20 @@ function openQualityDialog(id, again) {
   }, MSG.download());
   // כמו ytd-settings-radio-option-renderer: #start (רדיו + שם) ו-#end (גודל)
   const last = dlLastChoice();
-  const rows = DL_CHOICES.map(c => {
+  const makeRows = choices => choices.map(c => {
     const radio = h('input', { type: 'radio', class: 'dq-radio', name: 'ytu-dl-quality', value: c.value,
       onchange: () => { chosen = c.value; okBtn.disabled = false; } });
     if (c.value === last) radio.setAttribute('data-last', '');
     const aside = h('div', { class: 'dq-aside' }, '');
     asides.set(c.value, aside);
+    if (chosen === c.value) radio.checked = true;
     return h('label', { class: 'dq-row', 'data-choice': c.value },
       h('div', { class: 'dq-start' }, radio, h('div', { class: 'dq-label' }, dlT(c.he, c.en))),
       h('div', { class: 'dq-end' }, aside));
   });
+  const list = h('div', { class: 'dq-list', role: 'radiogroup' }, makeRows(DL_CHOICES));
   const remember = h('input', { type: 'checkbox', class: 'dq-check' });
-  const body = h('div', { class: 'dq' },
-    h('div', { class: 'dq-list', role: 'radiogroup' }, rows),
+  const body = h('div', { class: 'dq' }, list,
     h('label', { class: 'dq-remember' }, remember, h('span', null, MSG.remember())));
 
   const cancelBtn = dlButton(MSG.cancel(), 'dq-cancel', () => dlg.close(false));
@@ -862,6 +899,9 @@ function openQualityDialog(id, again) {
   if (method !== 'server') {
     dlGetInfo(id).then(info => {
       if (!dlg.back.isConnected) return;
+      // עכשיו יודעים מה יוטיוב מציע לסרטון הזה – מציגים את כל האיכויות
+      asides.clear();
+      fill(list, ...makeRows(dlChoices(info)));
       for (const [value, aside] of asides) aside.textContent = dlSizeText(info, value);
     }).catch(() => {});
   }
@@ -995,6 +1035,18 @@ async function startDownload(id, choice) {
   return runDownload(id, choice);
 }
 
+// האיכות הבאה מתחת לזו שנבחרה (לפי מה שיש לסרטון), או null אם זו הנמוכה
+function dlLowerChoice(id, choice) {
+  const info = dlInfoNow(id);
+  if (!info || dlIsAudio(choice)) return null;
+  const cur = dlPickVideo(info, choice);
+  if (!cur) return null;
+  const lower = [...info.videos].filter(v => v.height && v.height < cur.height).sort((a, b) => b.height - a.height)[0];
+  return lower ? String(lower.height) : null;
+}
+
+const dlOutOfMemory = e => !!e && (e.name === 'RangeError' || e.tooLarge);
+
 async function runDownload(id, choice) {
   const method = hasDrive() ? dlMethod() : 'browser';
   if (method === 'server') return serverDownload(id, choice);
@@ -1003,8 +1055,17 @@ async function runDownload(id, choice) {
     await browserDownload(id, choice, b => { busy = b; });
   } catch (e) {
     if (e && e.name === 'AbortError') return; // בוטל – dlCancel כבר סיים
+    // הסרטון כבד לדפדפן: מנסים את האיכות שמתחת, כמו שיוטיוב מנמיך איכות בהורדה
+    if (dlOutOfMemory(e)) {
+      const lower = dlLowerChoice(id, choice);
+      if (lower) {
+        if (busy && dlBusy === busy) dlBusy = null;
+        dlSnack(dlT('הסרטון כבד לדפדפן. מוריד ב-' + lower + 'p', 'Too large for the browser. Downloading at ' + lower + 'p'), null, 4000);
+        return runDownload(id, lower);
+      }
+    }
     // קישור שפג (403) – בניסיון הבא מבקשים קישורים חדשים
-    if (e && e.expired && dlInfo.has(id)) dlInfo.delete(id);
+    if (e && e.expired && dlInfo.has(id)) { dlInfo.delete(id); dlInfoReady.delete(id); }
     // ב-auto: ממשיכים דרך השרת באותו מקום בסשן (לא נספר כהורדה נוספת)
     if (method === 'auto' && hasDrive()) {
       if (busy && dlBusy === busy) dlBusy = null;
@@ -1030,7 +1091,7 @@ async function browserDownload(id, choice, onBusy) {
       new Promise((_, rej) => abort.signal.addEventListener('abort', () => rej(aborted()), { once: true })),
     ]);
     busy.meta = dlMeta(id, info);
-    const v = choice === 'audio' ? null : dlPickVideo(info, choice);
+    const v = dlIsAudio(choice) ? null : dlPickVideo(info, choice);
     const files = v ? [v, info.audio] : [info.audio];
     const total = files.reduce((n, f) => n + (+f.contentLength || 0), 0);
     let done = 0, shownAt = 0;
@@ -1047,9 +1108,25 @@ async function browserDownload(id, choice, onBusy) {
     for (const f of files) buffers.push(await fetchFile(f, tick, abort.signal));
     if (abort.signal.aborted) throw aborted();
     await sleep(30);
-    const parts = Mux.build(buffers, info.length);
-    const name = safeName(info.title) + (v ? '.mp4' : '.m4a');
-    saveFile(parts, name, v ? 'video/mp4' : 'audio/mp4');
+    let parts = Mux.build(buffers, info.length);
+    let ext = v ? '.mp4' : '.m4a', mime = v ? 'video/mp4' : 'audio/mp4';
+    if (choice === 'mp3') {
+      // יוטיוב לא מגיש MP3 בכלל, אז מפענחים את ה-AAC ומקודדים מחדש (לוקח זמן, ויש אובדן איכות)
+      busy.converting = true;
+      busy.percent = 0;
+      dlShowProgress(busy);
+      let shownMp3 = 0;
+      parts = await toMp3(parts, info, frac => {
+        if (abort.signal.aborted) throw aborted();
+        busy.percent = Math.min(99, frac * 100);
+        if (Date.now() - shownMp3 > 150) { shownMp3 = Date.now(); refreshDownloadButtons(); dlShowProgress(busy); }
+      });
+      busy.converting = false;
+      ext = '.mp3';
+      mime = 'audio/mpeg';
+    }
+    const name = safeName(info.title) + ext;
+    saveFile(parts, name, mime);
     dlSetDone(id, true, dlMeta(id, info));
     // "הורדת" + "לצפייה בסרטון" (A2N ב-kevlar_base)
     dlFinish(busy, { text: MSG.downloaded(), action: dlViewAction() });
@@ -1061,9 +1138,9 @@ async function browserDownload(id, choice, onBusy) {
 
 // האיכות בשרת: הגובה הקרוב שהשרת מכיר (DRIVE_QUALITIES: 1080/720/480/360)
 function dlServerQuality(choice) {
-  if (choice === 'audio') return { type: 'audio', quality: 'm4a' };
+  if (dlIsAudio(choice)) return { type: 'audio', quality: choice === 'mp3' ? 'mp3' : 'm4a' };
   const c = DL_CHOICES.find(x => x.value === choice);
-  const height = c ? c.height : 720;
+  const height = c ? c.height : (/^\d+$/.test(String(choice)) ? +choice : 720);
   const q = [1080, 720, 480, 360].find(x => x <= height) || 360;
   return { type: 'video', quality: String(q) };
 }
