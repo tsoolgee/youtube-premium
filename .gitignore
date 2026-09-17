@@ -1,0 +1,5 @@
+dist/
+__pycache__/
+test/*.mp4
+test/*.m4a
+test/real/out/

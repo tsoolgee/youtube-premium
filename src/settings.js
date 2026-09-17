@@ -1,0 +1,111 @@
+// רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, ל-service worker ולסקריפט הטמפרמונקי.
+// type: bool / select / text. secret לא מגיע לדף בתוסף. extensionOnly מוסתר בטמפרמונקי.
+// popupOnly: בתוסף נערך רק בחלון התוסף – הדף (וכל סקריפט אחר שרץ בו) לא יכול לשנות אותו.
+// drive-client.js נטען לפני הקובץ הזה בכל ההקשרים; בגשר (bridge) הוא לא נטען, ולכן יש ברירת מחדל.
+const SETTING_GROUPS = [
+  { id: 'ads', label: 'פרסומות', labelEn: 'Ads' },
+  { id: 'watch', label: 'צפייה', labelEn: 'Playback' },
+  { id: 'download', label: 'הורדות', labelEn: 'Downloads' },
+  { id: 'drive', label: 'שרת Drive', labelEn: 'Drive server' },
+];
+
+// labelEn / descEn: כשממשק יוטיוב לא בעברית
+const SETTINGS = [
+  { key: 'adblock', type: 'bool', group: 'ads', def: true, label: 'בלי פרסומות', desc: 'מדלג על פרסומות בסרטונים ומסתיר פרסומות בדף הבית, בחיפוש ובצד',
+    labelEn: 'Ad-free', descEn: 'Skips video ads and hides ads on Home, Search and the sidebar' },
+  { key: 'adPrune', type: 'bool', group: 'ads', def: true, label: 'חסימה מוקדמת', desc: 'מוחק את הפרסומות לפני שהנגן טוען אותן. אם סרטונים נתקעים בטעינה – לכבות',
+    labelEn: 'Early blocking', descEn: 'Removes ads before the player loads them. Turn off if videos get stuck loading' },
+  { key: 'hidePromos', type: 'bool', group: 'ads', def: true, label: 'בלי חלונות Premium', desc: 'מסתיר הצעות "נסו את YouTube Premium" ואת האזהרה על חוסם פרסומות',
+    labelEn: 'No Premium offers', descEn: 'Hides "Try YouTube Premium" offers and the ad-blocker warning' },
+
+  { key: 'background', type: 'bool', group: 'watch', def: true, label: 'ניגון ברקע', desc: 'הסרטון ממשיך כשעוברים לשונית או ממזערים, ובלי "עדיין צופים?"',
+    labelEn: 'Background play', descEn: 'Keeps playing in another tab or when minimized, without "Still watching?"' },
+  { key: 'pip', type: 'bool', group: 'watch', def: true, label: 'תמונה בתוך תמונה', desc: 'אפשר לצפות בחלון צף מעל כל החלונות',
+    labelEn: 'Picture-in-picture', descEn: 'Watch in a floating window above other windows' },
+  { key: 'autoPip', type: 'bool', group: 'watch', def: true, label: 'חלון צף אוטומטי', desc: 'במובייל (m.youtube): עובר לחלון צף כשיוצאים מהלשונית באמצע ניגון',
+    labelEn: 'Automatic picture-in-picture', descEn: 'On mobile (m.youtube): switches to a floating window when you leave the tab while playing' },
+  { key: 'maxQuality', type: 'bool', group: 'watch', def: false, label: 'איכות מרבית', desc: 'נועל כל סרטון על האיכות הגבוהה ביותר במקום "אוטומטי" של יוטיוב',
+    labelEn: 'Highest quality', descEn: 'Locks every video to the highest quality instead of YouTube’s Auto' },
+  { key: 'speed', type: 'bool', group: 'watch', def: true, label: 'מהירויות Premium', desc: 'מהירויות Premium עד פי 4 בתפריט המהירות',
+    labelEn: 'Premium playback speeds', descEn: 'Premium speeds up to 4x in the playback speed menu' },
+
+  { key: 'download', type: 'bool', group: 'download', def: true, label: 'הורדות', desc: 'כפתור "הורדה" של יוטיוב מוריד את הסרטון (וידאו או שמע)',
+    labelEn: 'Downloads', descEn: 'YouTube’s Download button saves the video (video or audio)' },
+  { key: 'downloadQuality', type: 'select', group: 'download', def: 'ask', label: 'איכות ההורדה', desc: 'כמו בהגדרות ההורדה של YouTube Premium',
+    labelEn: 'Download quality', descEn: 'Like YouTube Premium’s download settings',
+    options: [
+      { value: 'ask', label: 'לשאול בכל פעם', labelEn: 'Ask each time' },
+      { value: '1080', label: 'Full HD (1080p)', labelEn: 'Full HD (1080p)' },
+      { value: '720', label: 'גבוהה (720p)', labelEn: 'High (720p)' },
+      { value: '360', label: 'בינונית (360p)', labelEn: 'Medium (360p)' },
+      { value: '144', label: 'נמוכה (144p)', labelEn: 'Low (144p)' },
+      { value: 'audio', label: 'שמע בלבד', labelEn: 'Audio only' },
+    ] },
+  { key: 'downloadMethod', type: 'select', group: 'download', def: 'auto', label: 'שיטת הורדה', desc: 'באוטומטי: קודם בדפדפן, ואם נכשל – דרך השרת',
+    labelEn: 'Download method', descEn: 'Automatic: in the browser first, then through the server if that fails',
+    options: [
+      { value: 'auto', label: 'אוטומטי', labelEn: 'Automatic' },
+      { value: 'browser', label: 'רק בדפדפן', labelEn: 'Browser only' },
+      { value: 'server', label: 'רק דרך השרת', labelEn: 'Server only' },
+    ] },
+  { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
+    labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
+
+  { key: 'serverUrl', type: 'text', group: 'drive', popupOnly: true, label: 'כתובת השרת', desc: 'כתובת ה-Apps Script של הממסר (ריק = ברירת המחדל)',
+    labelEn: 'Server address', descEn: 'Relay Apps Script URL (empty = default)',
+    def: typeof DRIVE_DEFAULT_SERVER !== 'undefined' ? DRIVE_DEFAULT_SERVER
+      : 'https://script.google.com/macros/s/AKfycbxewFuo8cSzfhhsGYsfwPD68MvB20UELCLXzazk6GbiWqCB5Y07IS5sYDAXjvhMVFMl/exec' },
+  { key: 'apiKey', type: 'text', group: 'drive', def: '', secret: true, label: 'מפתח API', desc: 'רק אם השרת דורש מפתח',
+    labelEn: 'API key', descEn: 'Only if the server requires one' },
+  { key: 'shareCookies', type: 'bool', group: 'drive', def: false, confirm: 'cookies', extensionOnly: true, popupOnly: true, label: 'שיתוף עוגיות יוטיוב',
+    desc: 'כשיוטיוב חוסם את השרת ("אמתו שאתם לא בוט") – שולח לשרת את החיבור שלכם ליוטיוב. כבוי כברירת מחדל',
+    labelEn: 'Share YouTube cookies', descEn: 'When YouTube blocks the server ("confirm you’re not a bot"), sends your YouTube sign-in to the server. Off by default' },
+];
+
+const DEFAULTS = Object.fromEntries(SETTINGS.map(s => [s.key, s.def]));
+
+// ערכים ישנים (2.1.0): איכות ההורדה high/medium/low היו 1080/720/360
+const LEGACY_VALUES = { downloadQuality: { high: '1080', medium: '720', low: '360' } };
+function migrateSettings(settings) {
+  const out = { ...(settings || {}) };
+  for (const [key, map] of Object.entries(LEGACY_VALUES)) {
+    if (Object.prototype.hasOwnProperty.call(map, out[key])) out[key] = map[out[key]];
+  }
+  return out;
+}
+
+// נוסח האזהרה לפני הפעלת שיתוף העוגיות (בחלון התוסף)
+const COOKIE_WARNING = {
+  title: 'שיתוף עוגיות יוטיוב עם השרת',
+  text: [
+    'כשיוטיוב חוסם את שרת ההורדה, התוסף ישלח לשרת את עוגיות ההתחברות שלכם ליוטיוב ולגוגל, כדי שההורדה תיעשה בשם החשבון שלכם.',
+    'העוגיות נותנות גישה לחשבון הגוגל שמחובר בדפדפן הזה (מייל, דרייב, יוטיוב). מומלץ מאוד להשתמש בחשבון משני ולא בחשבון הראשי.',
+    'העוגיות נשמרות רק בשרת ההורדה הביתי ומשמשות רק להורדות. הן לא נשמרות בתוסף ולא נשלחות לשום מקום אחר.',
+    'הן יישלחו רק אם השרת מוגדר לקבל עוגיות, ורק כשהורדה נחסמה או כשלוחצים "שתפו עוגיות עכשיו". שינוי כתובת השרת מכבה את השיתוף.',
+  ],
+  ok: 'מבין, להפעיל',
+  cancel: 'ביטול',
+};
+const COOKIE_WARNING_EN = {
+  title: 'Share YouTube cookies with the server',
+  text: [
+    'When YouTube blocks the download server, the extension will send your YouTube and Google sign-in cookies to the server so the download runs as your account.',
+    'The cookies give access to the Google account signed in to this browser (Gmail, Drive, YouTube). Using a secondary account, not your main one, is strongly recommended.',
+    'The cookies are kept only on the home download server and used only for downloads. They are not stored in the extension or sent anywhere else.',
+    'They are sent only if the server accepts cookies, and only when a download was blocked or when you press "Share cookies now". Changing the server address turns sharing off.',
+  ],
+  ok: 'I understand, turn on',
+  cancel: 'Cancel',
+};
+
+// מפתחות שלא עוברים לדף בתוסף
+const SECRET_KEYS = SETTINGS.filter(s => s.secret).map(s => s.key);
+// מפתחות שהדף לא יכול לשנות בתוסף: סודות, כתובת השרת (אליה נשלחים המפתח והעוגיות) וההסכמה לעוגיות
+const PAGE_LOCKED_KEYS = SETTINGS.filter(s => s.secret || s.popupOnly).map(s => s.key);
+
+// מה נשמר באחסון: כתובת השרת שווה לברירת המחדל לא נשמרת, כדי שעדכון הממסר בגרסה חדשה יגיע לכולם
+function storableSettings(settings) {
+  const out = { ...(settings || {}) };
+  if (!out.serverUrl || String(out.serverUrl).trim() === DEFAULTS.serverUrl) delete out.serverUrl;
+  return out;
+}

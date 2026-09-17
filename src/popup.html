@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>יוטיוב פרימיום</title>
+<style>
+  /* הצבעים של יוטיוב: כהה (‎#0f0f0f) או בהיר (‎#fff) לפי ערכת המערכת */
+  :root {
+    color-scheme: dark;
+    --bg: #0f0f0f; --raised: #212121; --raised2: #272727; --text: #f1f1f1; --text2: #aaa; --line: rgba(255,255,255,.1);
+    --hover: rgba(255,255,255,.1); --blue: #3ea6ff; --blue-hover: #263850; --red: #ff0033; --ok: #81c995; --err: #ff8983;
+    --chip: rgba(255,255,255,.1); --chip-hover: rgba(255,255,255,.2); --field-line: rgba(255,255,255,.3); --track: #aaa; --track-on: rgba(62,166,255,.5); --knob: #f1f1f1;
+    --pill-bg: #f1f1f1; --pill-text: #0f0f0f; --pill-hover: #d9d9d9; --on-blue: #0f0f0f;
+    --font: Roboto, "YouTube Noto", "Segoe UI", Arial, sans-serif;
+    --title-font: "YouTube Sans", Roboto, "Segoe UI", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #fff; --raised: #f2f2f2; --raised2: #e5e5e5; --text: #0f0f0f; --text2: #606060; --line: rgba(0,0,0,.1);
+      --hover: rgba(0,0,0,.05); --blue: #065fd4; --blue-hover: #def1ff; --ok: #107516; --err: #cc0000;
+      --chip: rgba(0,0,0,.05); --chip-hover: rgba(0,0,0,.1); --field-line: rgba(0,0,0,.3); --track: #717171; --track-on: rgba(6,95,212,.5); --knob: #fff;
+      --pill-bg: #0f0f0f; --pill-text: #fff; --pill-hover: #272727; --on-blue: #fff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); }
+  body { width: 380px; color: var(--text); font: 400 14px/20px var(--font); }
+  button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+  button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  /* כותרת בסגנון הלוגו של YouTube Premium */
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 6px; height: 56px; padding: 0 16px; background: var(--bg); }
+  /* הלוגו של YouTube Premium: סמל הנגן + "YouTube" + "Premium" */
+  .logo { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; direction: ltr; justify-content: flex-end; }
+  html[dir=ltr] .logo { justify-content: flex-start; }
+  .logo svg { flex: none; width: 29px; height: 20px; }
+  .logo h1 { margin: 0; display: flex; align-items: baseline; gap: 4px; white-space: nowrap; color: var(--text); }
+  .logo .wm { font: 700 19px/24px var(--title-font); letter-spacing: -1px; }
+  .logo .tier { font: 400 19px/24px var(--title-font); letter-spacing: -.5px; }
+  header small { color: var(--text2); font-size: 12px; direction: ltr; }
+
+  main { padding: 0 16px 8px; }
+  .hero { margin: 4px 0 16px; padding: 16px; border-radius: 12px; background: var(--raised); }
+  .hero p { margin: 0 0 12px; color: var(--text2); font-size: 13px; line-height: 18px; }
+  .pill { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 16px; border-radius: 18px;
+    background: var(--pill-bg); color: var(--pill-text); font-weight: 500; white-space: nowrap; }
+  .pill:hover:not(:disabled) { background: var(--pill-hover); }
+  .pill:disabled { background: var(--chip); color: var(--text2); cursor: default; }
+  .pill svg { width: 24px; height: 24px; margin-inline-start: -6px; }
+  .hint { color: var(--text2); font-size: 12px; margin: 8px 0 0; min-height: 0; }
+  .hint:empty { display: none; }
+
+  section { margin: 0 0 16px; }
+  h2, h3 { margin: 16px 0 4px; font: 500 16px/22px var(--font); }
+  h3 { margin-top: 24px; }
+  h2 small { display: block; color: var(--text2); font: 400 12px/18px var(--font); }
+
+  label.opt { display: flex; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  label.opt div { flex: 1; min-width: 0; }
+  label.opt small { display: block; color: var(--text2); font-size: 12px; line-height: 18px; margin-top: 2px; }
+  label.opt.col { flex-direction: column; align-items: stretch; gap: 8px; cursor: default; }
+
+  /* מתג כמו tp-yt-paper-toggle-button של יוטיוב: בעברית (RTL) הכפתור מתחיל מימין וזז שמאלה */
+  input[type=checkbox] { appearance: none; position: relative; flex: none; width: 36px; height: 14px; margin: 3px; border-radius: 7px; background: var(--track); cursor: pointer; transition: background .15s; }
+  input[type=checkbox]::after { content: ''; position: absolute; top: -3px; inset-inline-start: -3px; width: 20px; height: 20px; border-radius: 50%; background: var(--knob);
+    box-shadow: 0 1px 5px rgba(0,0,0,.6); transition: inset-inline-start .15s, background .15s; }
+  input[type=checkbox]:checked { background: var(--track-on); }
+  input[type=checkbox]:checked::after { inset-inline-start: 19px; background: var(--blue); }
+
+  select, input.text { font: inherit; color: var(--text); background: var(--chip); border: 0; border-bottom: 1px solid var(--field-line); border-radius: 8px 8px 0 0; padding: 8px 10px; }
+  select { flex: none; max-width: 160px; cursor: pointer; }
+  select option { background: var(--raised2); }
+  input.text { width: 100%; direction: ltr; text-align: left; }
+  input.text:focus { outline: none; border-bottom: 2px solid var(--blue); }
+
+  .sm { flex: none; height: 32px; padding: 0 12px; border-radius: 16px; background: var(--chip); font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .sm:hover:not(:disabled) { background: var(--chip-hover); }
+  .sm:disabled { opacity: .5; cursor: default; }
+  .line { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .msg { flex: 1; color: var(--text2); font-size: 12px; line-height: 18px; min-width: 0; }
+  .msg.ok { color: var(--ok); }
+  .msg.err { color: var(--err); }
+
+  .empty { color: var(--text2); font-size: 12px; padding: 8px 0; }
+  ul.jobs { list-style: none; margin: 0; padding: 0; }
+  ul.jobs li { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .job-thumb { flex: none; width: 64px; height: 36px; border-radius: 6px; background: var(--raised2) center / cover no-repeat; }
+  .job-body { flex: 1; min-width: 0; }
+  .job-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job-meta { display: flex; flex-wrap: wrap; gap: 0 8px; color: var(--text2); font-size: 12px; line-height: 18px; }
+  .job-meta span + span::before { content: '•'; margin-inline-end: 8px; }
+  .job-state.done { color: var(--ok); }
+  .job-state.error { color: var(--err); }
+  .job-err { color: var(--err); font-size: 12px; line-height: 18px; margin-top: 4px; }
+  .job-link { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+  .job-link input { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: var(--text); background: var(--chip); border: 0; border-radius: 8px; padding: 6px 8px; direction: ltr; }
+  .bar { position: relative; height: 3px; background: var(--chip-hover); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--red); transition: width .3s; }
+  /* פס לא ידוע: transform (עובד גם ב-LTR, שם margin-right של בלוק לא משפיע), במראה לפי כיוון */
+  .bar.indet i { width: 30%; animation: indet 1.2s linear infinite; }
+  [dir=rtl] .bar.indet i { animation-name: indet-rtl; }
+  @keyframes indet { from { transform: translateX(-100%); } to { transform: translateX(333.4%); } }
+  @keyframes indet-rtl { from { transform: translateX(100%); } to { transform: translateX(-333.4%); } }
+
+  .dlg-back { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; padding: 12px; z-index: 10; }
+  .dlg { width: 100%; max-height: calc(100vh - 24px); overflow: auto; background: var(--raised2); border-radius: 12px; padding: 20px 20px 12px; box-shadow: 0 4px 32px rgba(0,0,0,.4); }
+  .dlg h2 { margin: 0 0 12px; font: 400 18px/24px var(--title-font); }
+  .dlg p { margin: 0 0 10px; color: var(--text2); font-size: 13px; line-height: 19px; }
+  .dlg p.warn { color: var(--text); }
+  .dlg p.status { font-size: 12px; }
+  .dlg p.status.err { color: var(--err); }
+  .dlg p.status.ok { color: var(--ok); }
+  .dlg .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .dlg .acts button { height: 36px; padding: 0 16px; border-radius: 18px; font-weight: 500; color: var(--blue); }
+  .dlg .acts button:hover { background: var(--blue-hover); }
+  .dlg .acts button.primary { background: var(--blue); color: var(--on-blue); }
+  .dlg .acts button.primary:hover { filter: brightness(1.08); }
+
+  footer.credit { padding: 12px 16px 14px; border-top: 1px solid var(--line); color: var(--text2); font-size: 12px; text-align: center; }
+  footer.credit a { color: var(--blue); text-decoration: none; font-weight: 500; }
+  footer.credit a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo" title="יוטיוב פרימיום">
+    <svg viewBox="0 0 29 20" aria-hidden="true"><path fill="#ff0033" d="M28.4 3.1A3.6 3.6 0 0025.9.6C23.7 0 14.5 0 14.5 0S5.3 0 3.1.6A3.6 3.6 0 00.6 3.1C0 5.4 0 10 0 10s0 4.6.6 6.9a3.6 3.6 0 002.5 2.5c2.2.6 11.4.6 11.4.6s9.2 0 11.4-.6a3.6 3.6 0 002.5-2.5c.6-2.3.6-6.9.6-6.9s0-4.6-.6-6.9Z"/><path fill="#fff" d="M11.6 14.3 19.1 10l-7.5-4.3v8.6Z"/></svg>
+    <h1><span class="wm">YouTube</span><span class="tier">Premium</span></h1>
+  </div>
+  <small id="version"></small>
+</header>
+<main>
+  <div class="hero">
+    <p id="hero-text">כל הפיצ'רים פועלים בתוך יוטיוב, במקומות הרגילים: כפתור "הורדה", תפריט ⚙ של הנגן ותפריט המהירות.</p>
+    <button class="pill" id="download">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17 18v1H6v-1h11zm-.5-6.6-.7-.7-3.8 3.7V4h-1v10.4l-3.8-3.8-.7.7 5 5 5-4.9z"/></svg>
+      <span id="download-text">הורדת הסרטון</span>
+    </button>
+    <p class="hint" id="hint"></p>
+  </div>
+  <section>
+    <h2><span id="jobs-title">הורדות אחרונות דרך השרת</span><small id="jobs-sub">ההורדות נשמרות בדרייב; אפשר לסגור את החלון בינתיים</small></h2>
+    <div id="jobs"></div>
+  </section>
+  <div id="settings"></div>
+</main>
+<footer class="credit"><span id="credit-text">נוצר ע"י צול גאה · </span><a href="https://tsoolgee.uk" target="_blank" rel="noopener">TSOOLGEE.UK</a></footer>
+<script src="drive-client.js"></script>
+<script src="settings.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

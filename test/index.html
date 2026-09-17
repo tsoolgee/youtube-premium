@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="he-IL"><head><meta charset="utf-8"><title>YT mock</title>
+<script>
+// דמה של יוטיוב: מחליף את ה-API של הנגן ואת נתיב ה-player בקבצים המקומיים.
+// פרמטרים: ?lang=en (ממשק אנגלי), ?dark=1 (html[dark]), ?label=1 (כפתור "הורדה" עם טקסט), ?msgs=0 (בלי yt.msgs_)
+const Q = new URLSearchParams(location.search);
+window.__Q = Object.fromEntries(Q);
+if (Q.get('lang') === 'en') document.documentElement.lang = 'en-US';
+if (Q.get('dark') === '1') document.documentElement.setAttribute('dark', '');
+// המחרוזות האמיתיות מ-yt.msgs_ (נקראו מהדף האמיתי 16/09/2026)
+if (Q.get('msgs') !== '0') window.yt = { msgs_: Q.get('lang') === 'en'
+  ? { DOWNLOADING: 'Downloading', DOWNLOADED: 'Downloaded', KEEP_OPEN: 'Keep this window open to continue', VIEW_DOWNLOADS: 'View',
+      DOWNLOAD_QUALITY: 'Download Quality', REMEMBER_MY_SETTINGS: 'Remember my settings', SBOX_INAPPROPRIATE_CANCEL: 'Cancel', DOWNLOAD: 'Download',
+      CANCEL: 'Cancel', DELETE: 'Delete', DELETE_FROM_DOWNLOADS: 'Remove from downloads', RETRY: 'Retry', DOWNLOADS: 'Downloads', YOUR_DOWNLOADS: 'Your downloads',
+      VIDEOS_DOWNLOADING_RATIO: 'Downloading... $downloaded/$total' }
+  : { DELETE_FROM_DOWNLOADS: 'הסרה מההורדות', DOWNLOAD: 'הורדה', DOWNLOADED: 'הורדת', DOWNLOADING: 'יורד', DOWNLOAD_AGAIN: 'הורדה חוזרת',
+      DOWNLOAD_QUALITY: 'איכות ההורדה', DOWNLOAD_UNAVAILABLE: 'ההורדה לא זמינה. צריך לנסות סרטון אחר.', KEEP_OPEN: 'יש להשאיר את החלון פתוח כדי להמשיך',
+      PREPARING_TO_DOWNLOAD: 'הכנות אחרונות להורדה...', REMEMBER_MY_SETTINGS: 'שמירת ההגדרות שלי', SBOX_INAPPROPRIATE_CANCEL: 'ביטול', VIEW_DOWNLOADS: 'לצפייה בסרטון',
+      CANCEL: 'ביטול', DELETE: 'מחיקה', RETRY: 'ניסיון חוזר', DOWNLOADS: 'הורדות', YOUR_DOWNLOADS: 'ההורדות שלך', NO_DOWNLOADS: 'אין הורדות',
+      VIDEOS_DOWNLOADING_RATIO: 'ההורדה מתבצעת... $total/$downloaded', WAITING_TO_DOWNLOAD: 'בהמתנה להורדה...' } };
+history.replaceState(null, '', '/test/index.html?v=jNQXAC9IVRw');
+const realFetch = window.fetch;
+
+// דמה של ממסר ה-Drive (script.google.com). לא יוצאת שום בקשה לשרת האמיתי.
+// __relay.mode: 'ok' | 'bot' (YT_BOT_CHECK) | 'blocked' (VIDEO_FILE_BLOCKED) | 'offline'
+window.__relay = { mode: 'ok', calls: [], jobs: {}, seq: 0, acceptCookies: true };
+function relayAnswer(env) {
+  const R = window.__relay;
+  R.calls.push(env);
+  if (R.mode === 'offline') return { status: 502, body: '<html>Bad gateway</html>' };
+  const p = env.path || '';
+  if (p === '/health') return { ok: true, service: 'yt-drive', accept_cookies: R.acceptCookies, cookies: 0 };
+  if (p === '/queue') return { ok: true, queued: 0, active: 0, accept_cookies: R.acceptCookies, cookies: 0 };
+  if (p === '/cookies') return { ok: true, message: 'mock', pool: 1 };
+  if (p === '/download') {
+    const b = env.body || {};
+    if (!b.url) return { ok: false, error: { code: 'BAD_URL', message: 'אין קישור' } };
+    const id = 'job' + (++R.seq);
+    R.jobs[id] = { polls: 0, mode: R.mode, body: b };
+    return { ok: true, job_id: id, state: 'queued' };
+  }
+  const m = p.match(/^\/status\/(.+)$/);
+  if (m) {
+    const j = R.jobs[decodeURIComponent(m[1])];
+    if (!j) return { ok: false, error: { code: 'JOB_NOT_FOUND', message: 'העבודה לא נמצאה' } };
+    const n = ++j.polls;
+    if (j.mode === 'bot') return { ok: true, state: 'error', error: { code: 'YT_BOT_CHECK', message: 'יוטיוב ביקש אימות שאינכם בוט' } };
+    if (j.mode === 'blocked' && n >= 2) return { ok: true, state: 'error', error: { code: 'VIDEO_FILE_BLOCKED', message: 'קובץ הווידאו חסום בסינון' } };
+    if (n === 1) return { ok: true, state: 'queued', position: 2, title: 'Me at the zoo' };
+    if (n === 2) return { ok: true, state: 'downloading', stage: 'video', percent: 42.5, title: 'Me at the zoo' };
+    return { ok: true, state: 'done', percent: 100, title: 'Me at the zoo', file_name: 'Me at the zoo.mp4', size: 632000, cached: false,
+      short_url: 'https://did.li/mock1', drive_url: 'https://drive.google.com/uc?id=mock&export=download', view_url: 'https://drive.google.com/file/d/mock/view' };
+  }
+  return { ok: false, error: { code: 'BAD_REQUEST', message: 'נתיב לא מוכר' } };
+}
+
+window.fetch = async (url, opts) => {
+  if (/^https:\/\/script\.google(usercontent)?\.com\//.test(String(url))) {
+    let env = {};
+    try { env = JSON.parse(opts && opts.body || '{}'); } catch {}
+    await new Promise(r => setTimeout(r, 30));
+    const a = relayAnswer(env);
+    if (a.status) return new Response(a.body, { status: a.status });
+    return new Response(JSON.stringify(a), { headers: { 'content-type': 'application/json' } });
+  }
+  if (String(url).includes('/youtubei/v1/player')) {
+    window.__playerRequest = JSON.parse(opts.body);
+    if (window.__failPlayer) return new Response('blocked', { status: 418 });
+    const f = (itag, mime, len, extra) => ({ itag, url: location.origin + '/test/' + (mime.startsWith('audio') ? 'a.m4a' : 'v.mp4') + (window.__brokenStreams ? '-missing' : '') + '?x=1', mimeType: mime, contentLength: String(len), bitrate: itag, ...extra });
+    return new Response(JSON.stringify({
+      playabilityStatus: { status: 'OK' },
+      adPlacements: [1], playerAds: [1],
+      videoDetails: { title: 'Me at the zoo: test/1', lengthSeconds: '19' },
+      streamingData: { adaptiveFormats: [
+        f(134, 'video/mp4; codecs="avc1.4d400c"', 322379, { height: 240, qualityLabel: '240p' }),
+        f(395, 'video/mp4; codecs="av01.0.00M.08"', 322379, { height: 240, qualityLabel: '240p' }),
+        f(140, 'audio/mp4; codecs="mp4a.40.2"', 309288, {}),
+        f(139, 'audio/mp4; codecs="mp4a.40.5"', 309288, { isDrc: true, bitrate: 999 }),
+      ] },
+    }), { headers: { 'content-type': 'application/json' } });
+  }
+  return realFetch(url, opts);
+};
+const attach = Element.prototype.attachShadow; Element.prototype.attachShadow = function (o) { return attach.call(this, { ...o, mode: 'open' }); };
+HTMLAnchorElement.prototype.click = function () { window.__saved = { name: this.download, href: this.href }; };
+window.open = (u) => { window.__opened = u; return null; };
+// מצב נקי בכל טעינה
+try { localStorage.removeItem('ytu-drive-jobs'); localStorage.removeItem('ytu-drive-poller'); } catch {}
+</script>
+<script src="/userscript/youtube-premium.user.js"></script>
+<style>.ytp-variable-speed-panel-premium-badge{display:block;opacity:0;visibility:hidden}.ytp-variable-speed-panel-premium-badge-visible{opacity:1;visibility:visible}.ytp-variable-speed-panel-badge{width:14px;height:14px;background:#f03;border-radius:3px}.ytp-bezel-text-hide .ytp-bezel-text{display:none}</style>
+</head>
+<body style="background:#0f0f0f;color:#fff;font-family:Arial">
+<script>if (!document.documentElement.hasAttribute('dark')) document.body.style.cssText = 'background:#fff;color:#0f0f0f;font-family:Arial';</script>
+<div id="movie_player" class="html5-video-player" style="width:640px;height:360px;position:relative">
+  <video class="html5-main-video" src="/test/v.mp4" width="640" muted loop></video>
+  <!-- תפריט ⚙ במבנה האמיתי (16/09/2026): תפריט ראשי + "מהירות הפעלה" עם הסליידר והצ'יפים -->
+  <div class="ytp-popup ytp-settings-menu" style="position:absolute;bottom:60px;right:12px;width:300px;background:rgba(28,28,28,.9)">
+    <div class="ytp-panel" id="main-panel">
+      <div class="ytp-panel-menu" role="menu">
+        <div class="ytp-menuitem" aria-haspopup="true" role="menuitem" tabindex="0" id="speed-item"><div class="ytp-menuitem-icon"></div><div class="ytp-menuitem-label">מהירות הפעלה</div><div class="ytp-menuitem-content">רגילה</div></div>
+        <div class="ytp-menuitem" aria-haspopup="true" role="menuitem" tabindex="0"><div class="ytp-menuitem-icon"></div><div class="ytp-menuitem-label">איכות</div><div class="ytp-menuitem-content">אוטומטי (240p)</div></div>
+      </div>
+    </div>
+    <div class="ytp-panel" id="speed-panel">
+      <div class="ytp-panel-header"><div class="ytp-panel-back-button-container"><button class="ytp-button ytp-panel-back-button"></button></div><span class="ytp-panel-title">מהירות הפעלה</span></div>
+      <div class="ytp-variable-speed-panel-content" tabindex="0">
+        <div class="ytp-speed-display-container"><div class="ytp-variable-speed-panel-display" aria-live="polite"><div class="ytp-variable-speed-panel-premium-badge" tabindex="-1"><div class="ytp-variable-speed-panel-badge"></div></div><span>1.00x</span></div></div>
+        <div class="ytp-variable-speed-panel-slider-container">
+          <button class="ytp-button ytp-variable-speed-panel-button ytp-variable-speed-panel-increment-button" aria-label="האטה של מהירות ההפעלה 0.05"><span>-</span></button>
+          <div class="ytp-input-slider-section">
+            <div class="ytp-speedslider-indicator-container"><div class="ytp-speedslider-badge" aria-label=""></div><p class="ytp-speedslider-text">1.00x</p></div>
+            <input class="ytp-input-slider ytp-speedslider ytp-varispeed-input-slider" role="slider" tabindex="0" type="range" min="0.25" max="2" step="0.05" value="1" aria-valuenow="1" aria-valuemin="0.25" aria-valuemax="2" aria-valuetext="1.00">
+          </div>
+          <button class="ytp-button ytp-variable-speed-panel-button ytp-variable-speed-panel-increment-button" aria-label="הגברה של מהירות ההפעלה 0.05"><span>+</span></button>
+        </div>
+        <div class="ytp-variable-speed-panel-chips">
+          <div class="ytp-variable-speed-panel-preset-button-wrapper"><button class="ytp-button ytp-variable-speed-panel-preset-button ytp-variable-speed-panel-button"><span>1.0</span></button><div class="ytp-variable-speed-panel-preset-button-label-text">רגילה</div></div>
+          <div class="ytp-variable-speed-panel-preset-button-wrapper"><button class="ytp-button ytp-variable-speed-panel-preset-button ytp-variable-speed-panel-button"><span>1.25</span></button></div>
+          <div class="ytp-variable-speed-panel-preset-button-wrapper"><button class="ytp-button ytp-variable-speed-panel-preset-button ytp-variable-speed-panel-button"><span>1.5</span></button></div>
+          <div class="ytp-variable-speed-panel-preset-button-wrapper"><button class="ytp-button ytp-variable-speed-panel-preset-button ytp-variable-speed-panel-button"><span>1.75</span></button></div>
+          <div class="ytp-variable-speed-panel-preset-button-wrapper"><button class="ytp-button ytp-variable-speed-panel-preset-button ytp-variable-speed-panel-button"><span>2.0</span></button></div>
+          <div class="ytp-variable-speed-panel-preset-button-wrapper"><button class="ytp-button ytp-variable-speed-panel-preset-button ytp-variable-speed-panel-button" id="chip3"><div class="ytp-variable-speed-panel-premium-upsell-icon">P</div><span>3.0</span></button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div data-layer="4" class="ytp-bezel-text-hide" style="display:none;position:absolute;top:40%;left:45%"><div class="ytp-bezel-text-wrapper"><div class="ytp-bezel-text"></div></div><div class="ytp-bezel" aria-label="השהיה"><div class="ytp-bezel-icon"></div></div></div>
+  <div class="ytp-chrome-bottom"><div class="ytp-right-controls" style="display:flex;background:#222;height:48px"><button class="ytp-button ytp-settings-button" aria-expanded="true">⚙</button></div></div>
+</div>
+<script>
+// "הנגן של יוטיוב": API ציבורי עד 2, והממשק מצייר את המהירות שלו אחרי כל שינוי
+(() => {
+  const mp = document.getElementById('movie_player');
+  const vid = mp.querySelector('video');
+  const RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+  let rate = 1;
+  window.__upsell = 0;
+  const render = () => {
+    mp.querySelector('.ytp-variable-speed-panel-display span').textContent = rate.toFixed(2) + 'x';
+    const sl = mp.querySelector('.ytp-varispeed-input-slider');
+    sl.value = rate;
+    sl.setAttribute('aria-valuenow', rate);
+    document.querySelector('#speed-item .ytp-menuitem-content').textContent = rate === 1 ? 'רגילה' : String(rate);
+  };
+  // כמו הנגן האמיתי: setPlaybackRate פועל רק כשהמהירות "שלו" משתנה
+  const set = r => { const n = Math.min(2, Math.max(0.25, Math.round(r * 20) / 20)); if (n === rate) return; rate = n; vid.playbackRate = rate; render(); };
+  mp.getAvailablePlaybackRates = () => RATES.slice();
+  mp.setPlaybackRate = r => set(+r);
+  mp.getPlaybackRate = () => rate;
+  mp.getVideoData = () => ({ video_id: 'jNQXAC9IVRw', title: 'Me at the zoo: test/1' });
+  const sl = mp.querySelector('.ytp-varispeed-input-slider');
+  sl.addEventListener('input', () => set(+sl.value));
+  for (const b of mp.querySelectorAll('.ytp-variable-speed-panel-increment-button')) {
+    b.addEventListener('click', () => set(rate + (b.textContent.trim() === '+' ? 0.05 : -0.05)));
+  }
+  for (const b of mp.querySelectorAll('.ytp-variable-speed-panel-preset-button')) {
+    b.addEventListener('click', () => { const r = +b.textContent.match(/[\d.]+/)[0]; if (r > 2) window.__upsell++; else set(r); });
+  }
+})();
+</script>
+
+<!-- כפתור ההורדה הרשמי (כפתור אייקון, is-hidden) ותפריט שלוש הנקודות, במבנה של יוטיוב (16/09/2026) -->
+<ytd-watch-metadata style="display:block;margin:12px 0">
+  <div id="actions"><ytd-menu-renderer style="display:flex;gap:8px">
+    <div id="flexible-item-buttons">
+      <ytd-download-button-renderer is-hidden="" button-renderer="true" style="display:inline-block"><ytd-button-renderer><yt-button-shape><button id="official-dl" class="ytSpecButtonShapeNextHost ytSpecButtonShapeNextIconButton" title="" aria-label="" style="display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 6px;border-radius:18px;border:0;background:rgba(127,127,127,.2);color:inherit"><div class="ytSpecButtonShapeNextIcon" style="width:24px;height:24px"><span class="ytIconWrapperHost" style="width:24px;height:24px;display:block">⤓</span></div></button></yt-button-shape></ytd-button-renderer><tp-yt-paper-tooltip style="display:block;font-size:11px"><div id="tooltip">הורדה</div></tp-yt-paper-tooltip></ytd-download-button-renderer>
+    </div>
+    <yt-icon-button id="menu-opener"><button id="menu-btn" aria-label="פעולות נוספות">⋯</button></yt-icon-button>
+  </ytd-menu-renderer></div>
+</ytd-watch-metadata>
+<ytd-popup-container>
+  <tp-yt-iron-dropdown id="dropdown" style="display:block">
+    <ytd-menu-service-item-renderer id="item-save"><tp-yt-paper-item><yt-formatted-string>שמירה</yt-formatted-string></tp-yt-paper-item></ytd-menu-service-item-renderer>
+    <ytd-menu-service-item-renderer id="item-dl"><tp-yt-paper-item><yt-formatted-string>הורדה</yt-formatted-string></tp-yt-paper-item></ytd-menu-service-item-renderer>
+  </tp-yt-iron-dropdown>
+</ytd-popup-container>
+<script>
+// ?label=1: כפתור רחב עם הטקסט "הורדה" (ytSpecButtonShapeNextButtonTextContent)
+if (window.__Q.label === '1') {
+  const b = document.getElementById('official-dl');
+  b.classList.remove('ytSpecButtonShapeNextIconButton');
+  const t = document.createElement('div');
+  t.className = 'ytSpecButtonShapeNextButtonTextContent';
+  t.textContent = document.documentElement.lang.startsWith('en') ? 'Download' : 'הורדה';
+  b.append(t);
+  b.style.padding = '0 16px 0 12px';
+}
+// הטיפול של "יוטיוב" עצמו – אסור שירוץ כשההשתלטות פעילה
+window.__pageClicks = [];
+for (const id of ['official-dl', 'item-dl', 'item-save', 'menu-btn']) {
+  document.getElementById(id).addEventListener('click', () => window.__pageClicks.push(id));
+}
+document.getElementById('dropdown').close = function () { this.__closed = true; };
+</script>
+<!-- m.youtube: הגיליון "מהירות" (variable-speed-controller-view-model) במבנה האמיתי, עם handler שנעצר ב-2 -->
+<bottom-sheet-container style="display:block;margin:12px 0;padding:12px;width:340px;border:1px solid #888">
+<variable-speed-controller-view-model class="ytwVariableSpeedControllerViewModelHost"><div class="ytwVariableSpeedControllerViewModelSpeedIndicatorContainer"><div class="ytwVariableSpeedControllerViewModelPlaybackSpeedDisplay" aria-live="polite">1.00x</div></div><div class="ytwVariableSpeedControllerViewModelSliderContainer"><div class="ytHorizontalSliderViewModelHost"><slider-shape class="ytSliderShapeHost" style="display:flex;align-items:center;gap:8px"><button class="ytSliderShapeHostIncrementButton" aria-label="האטת מהירות ההפעלה">−</button><input type="range" id="mweb-slider" class="ytSliderShapeHostSlider" min="0.25" max="2" aria-valuemax="2" value="1" step="0.05"><button class="ytSliderShapeHostIncrementButton" aria-label="הגברת מהירות ההפעלה">+</button></slider-shape></div></div><div class="ytwVariableSpeedControllerViewModelButtonContainer"><ytw-variable-speed-controller-speed-button-view-model><button-view-model><button><div class="ytSpecButtonShapeNextButtonTextContent">1x</div></button></button-view-model></ytw-variable-speed-controller-speed-button-view-model><ytw-variable-speed-controller-speed-button-view-model><button-view-model><button><div class="ytSpecButtonShapeNextButtonTextContent">2x</div></button></button-view-model></ytw-variable-speed-controller-speed-button-view-model></div></variable-speed-controller-view-model>
+</bottom-sheet-container>
+<script>
+(() => {
+  const host = document.querySelector('variable-speed-controller-view-model');
+  const sl = host.querySelector('input'), disp = host.querySelector('.ytwVariableSpeedControllerViewModelPlaybackSpeedDisplay');
+  const mp = document.getElementById('movie_player');
+  const show = r => { disp.textContent = r.toFixed(2) + 'x'; };
+  sl.addEventListener('input', () => { mp.setPlaybackRate(+sl.value); show(+sl.value); });
+  const [minus, plus] = host.querySelectorAll('.ytSliderShapeHostIncrementButton');
+  minus.addEventListener('click', () => { const r = Math.max(0.25, +sl.value - 0.05); sl.value = r; mp.setPlaybackRate(r); show(r); });
+  plus.addEventListener('click', () => { const r = Math.min(2, +sl.value + 0.05); sl.value = r; mp.setPlaybackRate(r); show(r); });
+  for (const b of host.querySelectorAll('ytw-variable-speed-controller-speed-button-view-model button')) {
+    b.addEventListener('click', () => { const r = parseFloat(b.textContent); sl.value = r; mp.setPlaybackRate(r); show(r); });
+  }
+})();
+// "יוטיוב" מציג אזהרת חוסם פרסומות (לבדיקה: __showEnforcement())
+window.__showEnforcement = () => {
+  const pc = document.querySelector('ytd-popup-container');
+  const d = document.createElement('tp-yt-paper-dialog');
+  d.setAttribute('opened', '');
+  d.style.cssText = 'display:block;position:fixed;top:30%;left:30%;background:#fff;color:#000;padding:30px';
+  const ev = document.createElement('ytd-enforcement-message-view-model');
+  ev.textContent = 'Ad blockers are not allowed';
+  d.append(ev);
+  pc.append(d);
+  const bd = document.createElement('tp-yt-iron-overlay-backdrop');
+  bd.setAttribute('opened', '');
+  bd.style.cssText = 'display:block;position:fixed;inset:0;background:rgba(0,0,0,.6)';
+  document.body.append(bd);
+  return d;
+};
+</script>
+<!-- דף "הורדות": פריט תפריט "הסרה מההורדות" עם offlineVideoEndpoint (כמו בדף האמיתי) -->
+<tp-yt-iron-dropdown id="dl-page-menu" style="display:block"><ytd-menu-service-item-renderer id="item-remove"><tp-yt-paper-item><yt-formatted-string>הסרה מההורדות</yt-formatted-string></tp-yt-paper-item></ytd-menu-service-item-renderer></tp-yt-iron-dropdown>
+<script>
+document.getElementById('item-remove').data = { serviceEndpoint: { offlineVideoEndpoint: { videoId: 'jNQXAC9IVRw', action: 'ACTION_REMOVE_WITH_PROMPT' } } };
+document.getElementById('item-remove').addEventListener('click', () => window.__pageClicks.push('item-remove'));
+document.getElementById('dl-page-menu').close = function () { this.__closed = true; };
+// פרסומת תפורה: __ad(true) מסמן ad-showing, __ad(false) מוריד (בלי אירוע מדיה)
+window.__ad = on => document.getElementById('movie_player').classList.toggle('ad-showing', on);
+</script>
+<div id="out"></div>
+</body></html>

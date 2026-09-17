@@ -1,0 +1,59 @@
+// ---------- הגדרות וחיבור הכל ----------
+// אין ממשק משלנו בדף: הפיצ'רים שקופים או יושבים בתוך הרכיבים של יוטיוב.
+
+function applySettings() {
+  styles.ads.disabled = !S.adblock;
+  styles.promos.disabled = !S.hidePromos;
+  applyAutoPip();
+  try { applySpeedSetting(); } catch {}
+  refreshSettingsDialog();
+}
+
+function update(patch) {
+  Object.assign(S, patch);
+  const saved = {};
+  for (const s of SETTINGS) {
+    // בתוסף הסוד, כתובת השרת וההסכמה לעוגיות נקבעים בחלון התוסף; הגשר שומר את הערכים הקיימים
+    if ((s.secret || s.popupOnly) && Platform.kind === 'extension') continue;
+    saved[s.key] = S[s.key];
+  }
+  Platform.save(storableSettings(saved));
+  applySettings();
+}
+
+Platform.onChange(next => {
+  Object.assign(S, DEFAULTS, migrateSettings(next));
+  applySettings();
+});
+
+// פקודות מחלון התוסף. 'download' פותח את דיאלוג ההורדה של יוטיוב (download.js)
+Platform.onCommand(cmd => onReady(() => {
+  if (cmd !== 'download' || !S.download) return;
+  openDownloadDialog();
+}));
+
+window.addEventListener('yt-navigate-finish', () => {
+  qualityDoneFor = '';
+});
+
+// כל רכיב בנפרד, כדי שתקלה באחד לא תעצור את השאר
+const TICK = [
+  () => handleAds(),
+  () => handlePromos(),
+  () => applyQuality(),
+  () => handleSpeed(),
+  () => refreshDownloadButtons(),
+  () => hookOfficialButtons(),
+  // טמפרמונקי בלבד: פריט "הגדרות יוטיוב פרימיום" בתפריטים של יוטיוב
+  () => ensureSettingsEntry(),
+];
+
+onReady(() => {
+  applySettings();
+  setInterval(() => {
+    for (const fn of TICK) {
+      try { fn(); } catch {}
+    }
+  }, 500);
+  setInterval(keepAwake, 60 * 1000);
+});

@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- דמה לחלון התוסף: chrome.* מדומה, בלי רשת. ?lang=en לאנגלית. נטען דרך השרת המקומי. -->
+<html><head><meta charset="utf-8"><title>popup mock</title>
+<script>
+const Q = new URLSearchParams(location.search);
+const store = { settings: { downloadQuality: 'high' }, driveJobs: [] };
+window.chrome = {
+  i18n: { getUILanguage: () => (Q.get('lang') === 'en' ? 'en-US' : 'he') },
+  runtime: { getManifest: () => ({ version: '2.1.1' }), lastError: undefined,
+    sendMessage: (msg, cb) => setTimeout(() => cb(msg.ytuDrive === 'jobs' ? [] : { ok: true, accept_cookies: false }), 10) },
+  tabs: { query: (q, cb) => cb([{ id: 1, url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }]), sendMessage: () => {}, create: () => {} },
+  storage: { local: { get: (k, cb) => { const r = { [k]: store[k] }; if (cb) setTimeout(() => cb(r), 0); return Promise.resolve(r); },
+    set: o => { Object.assign(store, o); return Promise.resolve(); } }, onChanged: { addListener: () => {} } },
+};
+// מחליף את popup.html של התוסף: טוען את הגוף שלו כפי שהוא
+fetch('/extension/popup.html').then(r => r.text()).then(html => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const st of doc.querySelectorAll('style')) document.head.append(st);
+  document.documentElement.lang = doc.documentElement.lang;
+  document.documentElement.dir = doc.documentElement.dir;
+  for (const n of [...doc.body.children]) if (n.tagName !== 'SCRIPT') document.body.append(n);
+  const load = src => new Promise(res => { const s = document.createElement('script'); s.src = '/extension/' + src; s.onload = res; document.body.append(s); });
+  load('drive-client.js').then(() => load('settings.js')).then(() => load('popup.js')).then(() => { window.__popupReady = true; });
+});
+</script></head><body></body></html>
