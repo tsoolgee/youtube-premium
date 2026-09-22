@@ -121,5 +121,22 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert.strictEqual(ctx.dlLowerChoice('abcdefghijk', 'mp3'), null);
   assert.strictEqual(ctx.dlLowerChoice('zzzzzzzzzzz', '1080'), null);
 
+  // "רק H.264" (ברירת מחדל): איכות שיש לה רק AV1 לא מוצגת, ובוחרים תמיד H.264
+  const av1info = { ...info, videos: [
+    { height: 2160, fps: 30, mimeType: 'video/mp4; codecs="av01.0.12M.08"', contentLength: '5000' },
+    { height: 1080, fps: 30, mimeType: 'video/mp4; codecs="av01.0.08M.08"', contentLength: '800' },
+    { height: 1080, fps: 30, mimeType: 'video/mp4; codecs="avc1.640028"', contentLength: '900' },
+    { height: 720, fps: 30, mimeType: 'video/mp4; codecs="avc1.4d401f"', contentLength: '500' },
+  ] };
+  ctx.S.h264Only = true;
+  assert.strictEqual(ctx.dlChoices(av1info).map(c => c.value).join(','), '1080,720,audio,mp3');
+  assert.ok(/avc1/.test(ctx.dlPickVideo(av1info, '2160').mimeType));
+  assert.strictEqual(ctx.dlPickVideo(av1info, '2160').height, 1080);
+  ctx.S.h264Only = false;
+  const all = ctx.dlChoices(av1info);
+  assert.strictEqual(all.map(c => c.value).join(','), '2160,1080,720,audio,mp3');
+  assert.ok(/AV1/.test(all[0].he));
+  ctx.S.h264Only = true;
+
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });

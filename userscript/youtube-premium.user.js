@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.0.4
+// @version      0.0.5
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -64,6 +64,8 @@
       ] },
     { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
       labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
+    { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
+      labelEn: 'H.264 only (plays everywhere)', descEn: 'Hides qualities YouTube only offers in AV1 (usually 1440p and 4K) – the Windows player shows them as audio only without the AV1 extension' },
   ];
 
   const DEFAULTS = Object.fromEntries(SETTINGS.map(s => [s.key, s.def]));
@@ -1923,9 +1925,14 @@
       method: 'POST', credentials: 'omit', headers, signal,
       body: JSON.stringify({ context: { client: { ...client, hl } }, videoId: id, contentCheckOk: true, racyCheckOk: true }),
     });
-    if (!r.ok) throw new Error(r.status === 418
-      ? dlT(DL_ERRORS.BLOCKED_418[0], DL_ERRORS.BLOCKED_418[1])
-      : dlT('יוטיוב החזיר שגיאה ', 'YouTube returned an error ') + r.status);
+    if (!r.ok) {
+      const err = new Error(r.status === 418
+        ? dlT(DL_ERRORS.BLOCKED_418[0], DL_ERRORS.BLOCKED_418[1])
+        : dlT('יוטיוב החזיר שגיאה ', 'YouTube returned an error ') + r.status);
+      // חסימה של הסינון (נטפרי ודומיו מחזירים 418) – מציגים את הסיבה מתחת ל"ההורדה נכשלה"
+      if (r.status === 418) err.ytReason = true;
+      throw err;
+    }
     const data = await r.json();
     const status = data.playabilityStatus || {};
     if (status.status !== 'OK') {
@@ -1997,6 +2004,7 @@
               // 4xx לא מסתדר בניסיון חוזר (403 = הקישור פג / נחסם); 429 כן
               err.fatal = r.status >= 400 && r.status < 500 && r.status !== 429;
               err.expired = r.status === 403;
+              if (r.status === 418) { err.message = dlT(DL_ERRORS.BLOCKED_418[0], DL_ERRORS.BLOCKED_418[1]); err.ytReason = true; }
               throw err;
             }
             const reader = r.body.getReader();
@@ -2084,6 +2092,7 @@
       const fps = v.fps > 30 ? String(Math.round(v.fps)) : '';
       // ב-1440p/4K יוטיוב נותן רק AV1 – נגן Windows בלי התוסף של AV1 מנגן רק שמע, אז מסמנים
       const av1 = !info.videos.some(x => x.height === v.height && /avc1/.test(x.mimeType || ''));
+      if (av1 && S.h264Only !== false) continue; // "רק H.264" (ברירת מחדל): קובץ שנפתח בכל נגן
       const tag = av1 ? ' (AV1)' : '';
       const label = preset ? null : v.height + 'p' + fps + tag;
       seen.set(v.height, preset
@@ -2217,7 +2226,8 @@
       || (/^\d+$/.test(String(norm)) ? { height: +norm } : null);
     if (!c || !c.height || !info.videos.length) return null;
     const avc = f => (/avc1/.test(f.mimeType) ? 1 : 0);
-    const list = [...info.videos].sort((a, b) => b.height - a.height || avc(b) - avc(a));
+    let list = [...info.videos].sort((a, b) => b.height - a.height || avc(b) - avc(a));
+    if (S.h264Only !== false && list.some(avc)) list = list.filter(avc);
     return list.find(v => v.height <= c.height) || list[list.length - 1];
   }
 
