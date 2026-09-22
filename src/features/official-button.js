@@ -38,16 +38,59 @@ function hookOfficialButtons() {
 // www: יוטיוב לא תמיד מציע "הורדה" – לא בשורת הכפתורים ולא בתפריט ⋮ (סרטונים שגם מנוי לא יכול להוריד,
 // חשבון מחובר עם הרבה כפתורים וכו'; דווח בפורום). ההורדה שלנו עובדת גם אז, ולכן מוסיפים לתפריט ⋮ של
 // הסרטון פריט "הורדה" מקורי: ytd-menu-service-item-renderer שיוטיוב עצמו מצייר מ-data (טקסט + אייקון OFFLINE_DOWNLOAD).
+// מאיפה נפתח התפריט: ⋮ של הסרטון בדף הצפייה, או ⋮ של סרטון ברשימה (דף הבית, צד, חיפוש, מנויים) – כמו ב-Premium
+function desktopMenuContext() {
+  if (!lastOpener || Date.now() - lastOpener.at > 15000) return null;
+  if (lastOpener.el.closest('ytd-watch-metadata #actions')) {
+    const rowButton = [...document.querySelectorAll('ytd-watch-metadata ytd-download-button-renderer')].some(obVisible);
+    return videoId() && !rowButton ? { kind: 'watch', id: videoId() } : null;
+  }
+  const ctx = contextVideo(lastOpener.path);
+  return ctx.known && !ctx.playlist && ctx.id && lastOpener.path.some(el => ITEM_TAG.test(el.tagName)) ? { kind: 'item', id: ctx.id } : null;
+}
+
 function ensureDesktopMenuDownload() {
-  const rowButton = [...document.querySelectorAll('ytd-watch-metadata ytd-download-button-renderer')].some(obVisible);
-  const fromWatch = !!(lastOpener && lastOpener.el.closest('ytd-watch-metadata #actions') && Date.now() - lastOpener.at < 15000);
-  const want = officialOn() && !!videoId() && !rowButton && fromWatch;
+  const menuCtx = officialOn() ? desktopMenuContext() : null;
+  const want = !!menuCtx;
+  // התפריט החדש (yt-sheet-view-model / yt-list-view-model) – בדף הבית ובצד
+  for (const sheet of document.querySelectorAll('tp-yt-iron-dropdown yt-list-view-model, ytd-popup-container yt-list-view-model')) {
+    let mine = sheet.querySelector(`[${DL_MENU_ITEM_ATTR}]`);
+    const open = !!obVisible(sheet);
+    if (!want || !open) { if (mine) mine.remove(); continue; }
+    // אותו תפריט נפתח עכשיו לסרטון אחר – מחליפים
+    if (mine && mine.getAttribute('data-ytu-video') !== menuCtx.id) { mine.remove(); mine = null; }
+    if (mine) continue;
+    const items = [...sheet.querySelectorAll('yt-list-item-view-model')].filter(obVisible);
+    if (!items.length || items.some(it => it.closest('yt-download-list-item-view-model') || isDownloadText(it))) continue;
+    const titleOf = it => it.querySelector('.ytListItemViewModelTitle, [class*="ListItemViewModelTitle"], [class*="list-item-view-model__title"]');
+    // משכפלים שורה שכבר יש לה אייקון (האייקון נטען רגע אחרי התפריט)
+    const tpl = items.find(it => it.querySelector('svg path') && titleOf(it));
+    if (!tpl) continue;
+    const clone = tpl.cloneNode(true);
+    clone.setAttribute(DL_MENU_ITEM_ATTR, '');
+    clone.setAttribute('data-ytu-video', menuCtx.id);
+    titleOf(clone).textContent = MSG.download();
+    for (const el of clone.querySelectorAll('[class*="Subtitle"], [class*="subtitle"]')) el.remove();
+    const paths = [...clone.querySelectorAll('svg path')];
+    paths.slice(1).forEach(x => x.remove());
+    if (paths[0]) paths[0].setAttribute('d', MWEB_DOWNLOAD_PATH);
+    const btn = clone.querySelector('button');
+    if (btn) { btn.removeAttribute('aria-pressed'); btn.setAttribute('aria-label', MSG.download()); }
+    // כמו ב-Premium: "הורדה" אחרי "שמירה" / "הוספה לתור", אחרת ראשונה
+    const after = items.filter(it => /שמירה|save|הוספה לתור|add to queue/i.test(obNorm((titleOf(it) || it).textContent))).pop();
+    if (after) after.after(clone); else items[0].before(clone);
+    const dd = sheet.closest('tp-yt-iron-dropdown');
+    setTimeout(() => { try { dd && dd.refit && dd.refit(); } catch {} }, 0);
+    try { refreshDownloadButtons(); } catch {}
+  }
+  // התפריט הישן (ytd-menu-popup-renderer)
   for (const dd of document.querySelectorAll('tp-yt-iron-dropdown')) {
     const list = dd.querySelector('tp-yt-paper-listbox#items');
     if (!list) continue;
-    const mine = list.querySelector(`:scope > [${DL_MENU_ITEM_ATTR}]`);
+    let mine = list.querySelector(`:scope > [${DL_MENU_ITEM_ATTR}]`);
     const open = dd.getAttribute('aria-hidden') !== 'true' && !!obVisible(dd);
     if (!want || !open) { if (mine) mine.remove(); continue; }
+    if (mine && mine.getAttribute('data-ytu-video') !== menuCtx.id) { mine.remove(); mine = null; }
     if (mine) continue;
     const items = [...list.children].filter(c => c !== mine);
     // יוטיוב כבר מציע הורדה בתפריט הזה – לא מוסיפים שנייה
@@ -59,6 +102,7 @@ function ensureDesktopMenuDownload() {
     el.className = tpl ? tpl.className : 'style-scope ytd-menu-popup-renderer';
     for (const a of ['system-icons', 'use-icons', 'role']) if (tpl && tpl.hasAttribute(a)) el.setAttribute(a, tpl.getAttribute(a) || '');
     el.setAttribute(DL_MENU_ITEM_ATTR, '');
+    el.setAttribute('data-ytu-video', menuCtx.id);
     el.data = {
       text: { runs: [{ text: MSG.download() }] },
       icon: { iconType: 'OFFLINE_DOWNLOAD' },
@@ -167,6 +211,7 @@ function ensureMobileSheetDownload() {
     if (!save || !save.querySelector('svg path')) continue;
     const clone = save.cloneNode(true);
     clone.setAttribute(DL_MENU_ITEM_ATTR, '');
+    clone.setAttribute('data-ytu-video', videoId());
     const t = clone.querySelector('.ytListItemViewModelTitle');
     if (t) t.textContent = MSG.download();
     const paths = [...clone.querySelectorAll('svg path')];
@@ -292,7 +337,7 @@ function onOfficialClick(e) {
         for (const ms of [50, 200, 500, 1000]) setTimeout(() => { try { ensureMobileSheetDownload(); } catch {} }, ms);
       }
       // www: ⋮ של הסרטון – אם יוטיוב לא שם בו "הורדה", מוסיפים
-      if (SITE === 'www' && opener.closest('ytd-watch-metadata #actions')) {
+      if (SITE === 'www' && (opener.closest('ytd-watch-metadata #actions') || path.some(el => ITEM_TAG.test(el.tagName)))) {
         for (const ms of [30, 150, 400, 900]) setTimeout(() => { try { ensureDesktopMenuDownload(); } catch {} }, ms);
       }
     }

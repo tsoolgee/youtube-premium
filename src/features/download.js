@@ -193,9 +193,12 @@ function dlChoices(info) {
     if (!v.height || seen.has(v.height)) continue;
     const preset = DL_CHOICES.find(c => c.height === v.height);
     const fps = v.fps > 30 ? String(Math.round(v.fps)) : '';
-    const label = preset ? null : v.height + 'p' + fps;
+    // ב-1440p/4K יוטיוב נותן רק AV1 – נגן Windows בלי התוסף של AV1 מנגן רק שמע, אז מסמנים
+    const av1 = !info.videos.some(x => x.height === v.height && /avc1/.test(x.mimeType || ''));
+    const tag = av1 ? ' (AV1)' : '';
+    const label = preset ? null : v.height + 'p' + fps + tag;
     seen.set(v.height, preset
-      ? { ...preset }
+      ? { ...preset, he: preset.he + tag, en: preset.en + tag }
       : { value: String(v.height), he: label, en: label, height: v.height });
   }
   const videos = [...seen.values()].sort((a, b) => b.height - a.height);
@@ -548,7 +551,8 @@ const DL_MENU_SEL = `ytd-menu-service-item-download-renderer, ytm-menu-service-i
 const dlMenuIds = new WeakMap(); // רכיב → { data, id } (החיפוש בנתונים יקר, והרכיב ממוחזר בין תפריטים)
 
 function dlMenuItemId(el) {
-  if (el.hasAttribute(DL_MENU_ITEM_ATTR)) return videoId();
+  // הפריט שהוספנו בעצמנו: הסרטון שלו נשמר ביצירה (בתפריט של סרטון ברשימה – לא הסרטון שמתנגן)
+  if (el.hasAttribute(DL_MENU_ITEM_ATTR)) return el.getAttribute('data-ytu-video') || videoId();
   const host = el.querySelector('yt-list-item-view-model') || el;
   let data = null;
   try { data = el.data || host.data || (el.__data && el.__data.data) || null; } catch {}

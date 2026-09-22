@@ -199,4 +199,19 @@ document.getElementById('dl-page-menu').close = function () { this.__closed = tr
 window.__ad = on => document.getElementById('movie_player').classList.toggle('ad-showing', on);
 </script>
 <div id="out"></div>
+
+<!-- סרטון ברשימה (yt-lockup-view-model) עם ⋮ שפותח תפריט מהסוג החדש – בלי "הורדה", כמו למי שאין Premium -->
+<div id="secondary" style="margin-top:12px">
+  <yt-lockup-view-model id="lockup" style="display:block;width:360px">
+    <a href="/watch?v=aaaaaaaaaaa">סרטון אחר ברשימה</a>
+    <button-view-model><button id="lockup-menu" aria-label="פעולות נוספות" onclick="document.getElementById('sheet-dd').style.display='block'">⋮</button></button-view-model>
+  </yt-lockup-view-model>
+</div>
+<tp-yt-iron-dropdown id="sheet-dd" style="display:none;position:fixed;top:40px;left:20px;background:#fff;border:1px solid #ccc">
+  <yt-sheet-view-model><yt-list-view-model id="sheet-list">
+    <yt-list-item-view-model style="display:block;height:40px"><button style="display:flex;gap:8px;border:0;background:none"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"></path></svg><span class="ytListItemViewModelTitle">הוספה לתור</span></button></yt-list-item-view-model>
+    <yt-list-item-view-model style="display:block;height:40px"><button style="display:flex;gap:8px;border:0;background:none"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M5 5h14v14H5z"></path></svg><span class="ytListItemViewModelTitle">שמירה</span></button></yt-list-item-view-model>
+    <yt-list-item-view-model style="display:block;height:40px"><button style="display:flex;gap:8px;border:0;background:none"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M8 8h8v8H8z"></path></svg><span class="ytListItemViewModelTitle">שיתוף</span></button></yt-list-item-view-model>
+  </yt-list-view-model></yt-sheet-view-model>
+</tp-yt-iron-dropdown>
 </body></html>

@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.0.3
+// @version      0.0.4
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -158,8 +158,212 @@
       return { b, moov, trak, frags };
     }
 
+    // ---------- MP4 רגיל (לא מפוצל) ----------
+    // נגני Windows ("סרטים וטלוויזיה", Media Player) לא יודעים לקפוץ בתוך MP4 מפוצל בלי אינדקס,
+    // ולפעמים מציגים רק שמע (דווח בפורום). לכן בונים MP4 "קלאסי": moov עם טבלאות דגימות מלאות
+    // (stts/ctts/stsz/stsc/stco/stss) ו-mdat אחד. הנתונים עצמם לא מועתקים – רק מצביעים לחלקים.
+    const full = (type, version, flags, parts) => {
+      const vf = new Uint8Array(4);
+      w32(vf, 0, flags);
+      vf[0] = version;
+      return box(type, [vf, ...parts]);
+    };
+    const u32arr = values => {
+      const out = new Uint8Array(values.length * 4);
+      values.forEach((v, i) => w32(out, i * 4, v >>> 0));
+      return out;
+    };
+    const w64 = (b, o, v) => { w32(b, o, Math.floor(v / 4294967296)); w32(b, o + 4, v >>> 0); };
+
+    // כל הדגימות של track אחד מתוך ה-moof/trun, לפי ברירות המחדל של trex/tfhd
+    function samplesOf(t) {
+      const { b } = t;
+      const trex = find(b, find(b, t.moov, 'mvex'), 'trex');
+      const def = { dur: u32(b, trex.body + 12), size: u32(b, trex.body + 16), flags: u32(b, trex.body + 20) };
+      const top = list(b, 0, b.length);
+      const chunks = [];
+      for (let i = 0; i + 1 < top.length; i++) {
+        if (top[i].type !== 'moof' || top[i + 1].type !== 'mdat') continue;
+        const moof = top[i], mdat = top[i + 1];
+        for (const traf of list(b, moof.body, moof.end).filter(x => x.type === 'traf')) {
+          const kids = list(b, traf.body, traf.end);
+          const tfhd = kids.find(x => x.type === 'tfhd') || fail();
+          const tf = u32(b, tfhd.body) & 0xffffff;
+          if (tf & 1) fail();
+          let o = tfhd.body + 8;
+          if (tf & 2) o += 4;
+          const d = { ...def };
+          if (tf & 8) { d.dur = u32(b, o); o += 4; }
+          if (tf & 0x10) { d.size = u32(b, o); o += 4; }
+          if (tf & 0x20) { d.flags = u32(b, o); o += 4; }
+          const tfdt = kids.find(x => x.type === 'tfdt');
+          let time = !tfdt ? null : b[tfdt.body] === 1
+            ? u32(b, tfdt.body + 4) * 4294967296 + u32(b, tfdt.body + 8)
+            : u32(b, tfdt.body + 4);
+          let dataPos = mdat.body; // בלי data_offset: הנתונים מתחילים בתחילת ה-mdat
+          for (const trun of kids.filter(x => x.type === 'trun')) {
+            const tv = b[trun.body], rf = u32(b, trun.body) & 0xffffff;
+            const count = u32(b, trun.body + 4);
+            let p = trun.body + 8;
+            if (rf & 1) { dataPos = moof.start + (u32(b, p) | 0); p += 4; }
+            let firstFlags = null;
+            if (rf & 4) { firstFlags = u32(b, p); p += 4; }
+            const samples = [];
+            let bytes = 0;
+            for (let s = 0; s < count; s++) {
+              const smp = { dur: d.dur, size: d.size, flags: s === 0 && firstFlags !== null ? firstFlags : d.flags, cto: 0 };
+              if (rf & 0x100) { smp.dur = u32(b, p); p += 4; }
+              if (rf & 0x200) { smp.size = u32(b, p); p += 4; }
+              if (rf & 0x400) { smp.flags = u32(b, p); p += 4; }
+              if (rf & 0x800) { smp.cto = tv === 1 ? (u32(b, p) | 0) : u32(b, p); p += 4; }
+              bytes += smp.size;
+              samples.push(smp);
+            }
+            if (dataPos + bytes > b.length) fail();
+            if (time === null) time = chunks.length ? chunks[chunks.length - 1].end : 0;
+            const dur = samples.reduce((n, s) => n + s.dur, 0);
+            chunks.push({ samples, start: dataPos, bytes, time, end: time + dur });
+            time += dur;
+            dataPos += bytes;
+          }
+        }
+      }
+      if (!chunks.length) fail();
+      return chunks;
+    }
+
+    // stts/ctts: רצפים של ערכים זהים
+    const runs = values => {
+      const out = [];
+      for (const v of values) {
+        const last = out[out.length - 1];
+        if (last && last[1] === v) last[0]++;
+        else out.push([1, v]);
+      }
+      return out;
+    };
+
+    function buildProgressive(inputs) {
+      const tracks = inputs.map(b => {
+        const t = parse(b);
+        const mdia = find(b, t.trak, 'mdia');
+        const mdhd = find(b, mdia, 'mdhd');
+        const scale = u32(b, mdhd.body + (b[mdhd.body] === 1 ? 20 : 12));
+        const chunks = samplesOf(t);
+        const samples = chunks.flatMap(c => c.samples);
+        return { ...t, mdia, mdhd, scale, chunks, samples, mediaDur: samples.reduce((n, s) => n + s.dur, 0) };
+      });
+
+      const first = tracks[0];
+      const mvhdBox = find(first.b, first.moov, 'mvhd');
+      const mvhd = first.b.slice(mvhdBox.start, mvhdBox.end);
+      const mv1 = mvhd[8] === 1;
+      const movieScale = u32(mvhd, mv1 ? 28 : 20);
+      const movieDur = Math.max(...tracks.map(t => Math.round(t.mediaDur / t.scale * movieScale)));
+      if (mv1) w64(mvhd, 32, movieDur); else w32(mvhd, 24, Math.min(movieDur, 0xffffffff));
+      w32(mvhd, mv1 ? 116 : 104, tracks.length + 1);
+
+      // סדר ה-chunks ב-mdat: משולבים לפי זמן, כדי שהנגן יקרא וידאו ושמע ביחד
+      const order = tracks
+        .flatMap((t, ti) => t.chunks.map(c => ({ c, ti, sec: c.time / t.scale })))
+        .sort((a, b) => a.sec - b.sec || a.ti - b.ti);
+      const totalData = order.reduce((n, x) => n + x.c.bytes, 0);
+      const big = totalData + 1024 * 1024 > 0xffffffff; // mdat של 64 ביט ו-co64
+
+      // בונים moov פעמיים: קודם כדי לדעת את הגודל שלו, ואז עם ההיסטים האמיתיים
+      const ftyp = box('ftyp', [ascii('isom'), new Uint8Array([0, 0, 2, 0]), ascii('isomiso2avc1mp41')]);
+      const makeMoov = dataStart => {
+        const offsets = tracks.map(() => []);
+        let pos = dataStart;
+        for (const x of order) { offsets[x.ti].push(pos); pos += x.c.bytes; }
+        // ה-chunks של כל track לפי סדר הופעתם ב-mdat (כלומר לפי זמן)
+        const traks = tracks.map((t, ti) => {
+          const b = t.b;
+          const tkhdBox = find(b, t.trak, 'tkhd');
+          const tkhd = b.slice(tkhdBox.start, tkhdBox.end);
+          const tv1 = tkhd[8] === 1;
+          w32(tkhd, 8 + (tv1 ? 20 : 12), ti + 1);
+          const tDur = Math.round(t.mediaDur / t.scale * movieScale);
+          if (tv1) w64(tkhd, 8 + 28, tDur); else w32(tkhd, 8 + 20, Math.min(tDur, 0xffffffff));
+
+          const mdhd = b.slice(t.mdhd.start, t.mdhd.end);
+          if (mdhd[8] === 1) w64(mdhd, 8 + 24, t.mediaDur); else w32(mdhd, 8 + 16, Math.min(t.mediaDur, 0xffffffff));
+          const hdlr = find(b, t.mdia, 'hdlr');
+          const minf = find(b, t.mdia, 'minf');
+          const minfKids = list(b, minf.body, minf.end);
+          const stbl = minfKids.find(x => x.type === 'stbl') || fail();
+          const stsd = find(b, stbl, 'stsd');
+
+          const sm = t.samples;
+          const stts = runs(sm.map(s => s.dur));
+          const ctts = sm.some(s => s.cto) ? runs(sm.map(s => s.cto)) : null;
+          const sync = sm.map((s, i) => ((s.flags >>> 16) & 1 ? 0 : i + 1)).filter(Boolean);
+          const stscRuns = [];
+          t.chunks.forEach((c, i) => {
+            const last = stscRuns[stscRuns.length - 1];
+            if (!last || last[1] !== c.samples.length) stscRuns.push([i + 1, c.samples.length, 1]);
+          });
+          const co = big ? (() => {
+            const arr = new Uint8Array(offsets[ti].length * 8);
+            offsets[ti].forEach((v, i) => w64(arr, i * 8, v));
+            return full('co64', 0, 0, [u32arr([offsets[ti].length]), arr]);
+          })() : full('stco', 0, 0, [u32arr([offsets[ti].length]), u32arr(offsets[ti])]);
+
+          const stblBoxes = [
+            b.slice(stsd.start, stsd.end),
+            full('stts', 0, 0, [u32arr([stts.length]), u32arr(stts.flat())]),
+            ctts ? full('ctts', ctts.some(([, v]) => v < 0) ? 1 : 0, 0, [u32arr([ctts.length]), u32arr(ctts.flat())]) : null,
+            sync.length && sync.length < sm.length ? full('stss', 0, 0, [u32arr([sync.length]), u32arr(sync)]) : null,
+            full('stsc', 0, 0, [u32arr([stscRuns.length]), u32arr(stscRuns.flat())]),
+            full('stsz', 0, 0, [u32arr([0, sm.length]), u32arr(sm.map(s => s.size))]),
+            co,
+          ].filter(Boolean);
+          const minfOut = box('minf', [
+            ...minfKids.filter(x => x.type !== 'stbl').map(x => b.slice(x.start, x.end)),
+            box('stbl', stblBoxes),
+          ]);
+          // רשימת העריכה (edts/elst) של יוטיוב מזיזה את הווידאו בפריים אחד (B-frames) – בלעדיה הווידאו
+          // מתחיל 67ms אחרי השמע. שומרים אותה, ומעדכנים את משך הקטע לאורך האמיתי
+          const edtsBox = list(b, t.trak.body, t.trak.end).find(x => x.type === 'edts');
+          let edts = null;
+          if (edtsBox) {
+            edts = b.slice(edtsBox.start, edtsBox.end);
+            const elst = list(edts, 8, edts.length).find(x => x.type === 'elst');
+            if (elst && u32(edts, elst.body + 4) === 1) {
+              const ev1 = edts[elst.body] === 1;
+              const mediaTime = ev1 ? u32(edts, elst.body + 16) * 4294967296 + u32(edts, elst.body + 20) : (u32(edts, elst.body + 12) | 0);
+              // כמו אצל יוטיוב: משך הקטע = כל המדיה (ההיסט של mediaTime מתקזז בהיסטי הקומפוזיציה – אחרת הפריים האחרון נחתך)
+              const seg = mediaTime >= 0 ? Math.round(t.mediaDur / t.scale * movieScale) : 0;
+              if (ev1) w64(edts, elst.body + 8, seg); else w32(edts, elst.body + 8, Math.min(seg, 0xffffffff));
+            }
+          }
+          return box('trak', [tkhd, ...(edts ? [edts] : []), box('mdia', [mdhd, b.slice(hdlr.start, hdlr.end), minfOut])]);
+        });
+        return box('moov', [mvhd, ...traks]);
+      };
+      const mdatHeader = big ? 16 : 8;
+      let moov = makeMoov(0);
+      moov = makeMoov(ftyp.length + moov.length + mdatHeader);
+
+      const mdatHead = new Uint8Array(mdatHeader);
+      if (big) { w32(mdatHead, 0, 1); mdatHead.set(ascii('mdat'), 4); w64(mdatHead, 8, totalData + 16); }
+      else { w32(mdatHead, 0, totalData + 8); mdatHead.set(ascii('mdat'), 4); }
+      const parts = [ftyp, moov, mdatHead];
+      for (const x of order) parts.push(tracks[x.ti].b.subarray(x.c.start, x.c.start + x.c.bytes));
+      return parts;
+    }
+
     // inputs: מערך Uint8Array (וידאו ואז אודיו, או רק אודיו). מחזיר חלקים ל-Blob.
+    // קודם MP4 רגיל (נפתח ונגלל בכל נגן); אם המבנה לא צפוי – MP4 מפוצל כמו קודם.
     function build(inputs, durationSec) {
+      try {
+        return buildProgressive(inputs);
+      } catch (e) {
+        return buildFragmented(inputs, durationSec);
+      }
+    }
+
+    function buildFragmented(inputs, durationSec) {
       const tracks = inputs.map(parse);
       const first = tracks[0];
       const mvhd = first.b.slice(...(({ start, end }) => [start, end])(find(first.b, first.moov, 'mvhd')));
@@ -211,7 +415,7 @@
       return parts;
     }
 
-    return { build };
+    return { build, buildProgressive, buildFragmented };
   })();
 
   // עזרים משותפים לכל הרכיבים.
@@ -1878,9 +2082,12 @@
       if (!v.height || seen.has(v.height)) continue;
       const preset = DL_CHOICES.find(c => c.height === v.height);
       const fps = v.fps > 30 ? String(Math.round(v.fps)) : '';
-      const label = preset ? null : v.height + 'p' + fps;
+      // ב-1440p/4K יוטיוב נותן רק AV1 – נגן Windows בלי התוסף של AV1 מנגן רק שמע, אז מסמנים
+      const av1 = !info.videos.some(x => x.height === v.height && /avc1/.test(x.mimeType || ''));
+      const tag = av1 ? ' (AV1)' : '';
+      const label = preset ? null : v.height + 'p' + fps + tag;
       seen.set(v.height, preset
-        ? { ...preset }
+        ? { ...preset, he: preset.he + tag, en: preset.en + tag }
         : { value: String(v.height), he: label, en: label, height: v.height });
     }
     const videos = [...seen.values()].sort((a, b) => b.height - a.height);
@@ -2233,7 +2440,8 @@
   const dlMenuIds = new WeakMap(); // רכיב → { data, id } (החיפוש בנתונים יקר, והרכיב ממוחזר בין תפריטים)
 
   function dlMenuItemId(el) {
-    if (el.hasAttribute(DL_MENU_ITEM_ATTR)) return videoId();
+    // הפריט שהוספנו בעצמנו: הסרטון שלו נשמר ביצירה (בתפריט של סרטון ברשימה – לא הסרטון שמתנגן)
+    if (el.hasAttribute(DL_MENU_ITEM_ATTR)) return el.getAttribute('data-ytu-video') || videoId();
     const host = el.querySelector('yt-list-item-view-model') || el;
     let data = null;
     try { data = el.data || host.data || (el.__data && el.__data.data) || null; } catch {}
@@ -2819,16 +3027,59 @@
   // www: יוטיוב לא תמיד מציע "הורדה" – לא בשורת הכפתורים ולא בתפריט ⋮ (סרטונים שגם מנוי לא יכול להוריד,
   // חשבון מחובר עם הרבה כפתורים וכו'; דווח בפורום). ההורדה שלנו עובדת גם אז, ולכן מוסיפים לתפריט ⋮ של
   // הסרטון פריט "הורדה" מקורי: ytd-menu-service-item-renderer שיוטיוב עצמו מצייר מ-data (טקסט + אייקון OFFLINE_DOWNLOAD).
+  // מאיפה נפתח התפריט: ⋮ של הסרטון בדף הצפייה, או ⋮ של סרטון ברשימה (דף הבית, צד, חיפוש, מנויים) – כמו ב-Premium
+  function desktopMenuContext() {
+    if (!lastOpener || Date.now() - lastOpener.at > 15000) return null;
+    if (lastOpener.el.closest('ytd-watch-metadata #actions')) {
+      const rowButton = [...document.querySelectorAll('ytd-watch-metadata ytd-download-button-renderer')].some(obVisible);
+      return videoId() && !rowButton ? { kind: 'watch', id: videoId() } : null;
+    }
+    const ctx = contextVideo(lastOpener.path);
+    return ctx.known && !ctx.playlist && ctx.id && lastOpener.path.some(el => ITEM_TAG.test(el.tagName)) ? { kind: 'item', id: ctx.id } : null;
+  }
+
   function ensureDesktopMenuDownload() {
-    const rowButton = [...document.querySelectorAll('ytd-watch-metadata ytd-download-button-renderer')].some(obVisible);
-    const fromWatch = !!(lastOpener && lastOpener.el.closest('ytd-watch-metadata #actions') && Date.now() - lastOpener.at < 15000);
-    const want = officialOn() && !!videoId() && !rowButton && fromWatch;
+    const menuCtx = officialOn() ? desktopMenuContext() : null;
+    const want = !!menuCtx;
+    // התפריט החדש (yt-sheet-view-model / yt-list-view-model) – בדף הבית ובצד
+    for (const sheet of document.querySelectorAll('tp-yt-iron-dropdown yt-list-view-model, ytd-popup-container yt-list-view-model')) {
+      let mine = sheet.querySelector(`[${DL_MENU_ITEM_ATTR}]`);
+      const open = !!obVisible(sheet);
+      if (!want || !open) { if (mine) mine.remove(); continue; }
+      // אותו תפריט נפתח עכשיו לסרטון אחר – מחליפים
+      if (mine && mine.getAttribute('data-ytu-video') !== menuCtx.id) { mine.remove(); mine = null; }
+      if (mine) continue;
+      const items = [...sheet.querySelectorAll('yt-list-item-view-model')].filter(obVisible);
+      if (!items.length || items.some(it => it.closest('yt-download-list-item-view-model') || isDownloadText(it))) continue;
+      const titleOf = it => it.querySelector('.ytListItemViewModelTitle, [class*="ListItemViewModelTitle"], [class*="list-item-view-model__title"]');
+      // משכפלים שורה שכבר יש לה אייקון (האייקון נטען רגע אחרי התפריט)
+      const tpl = items.find(it => it.querySelector('svg path') && titleOf(it));
+      if (!tpl) continue;
+      const clone = tpl.cloneNode(true);
+      clone.setAttribute(DL_MENU_ITEM_ATTR, '');
+      clone.setAttribute('data-ytu-video', menuCtx.id);
+      titleOf(clone).textContent = MSG.download();
+      for (const el of clone.querySelectorAll('[class*="Subtitle"], [class*="subtitle"]')) el.remove();
+      const paths = [...clone.querySelectorAll('svg path')];
+      paths.slice(1).forEach(x => x.remove());
+      if (paths[0]) paths[0].setAttribute('d', MWEB_DOWNLOAD_PATH);
+      const btn = clone.querySelector('button');
+      if (btn) { btn.removeAttribute('aria-pressed'); btn.setAttribute('aria-label', MSG.download()); }
+      // כמו ב-Premium: "הורדה" אחרי "שמירה" / "הוספה לתור", אחרת ראשונה
+      const after = items.filter(it => /שמירה|save|הוספה לתור|add to queue/i.test(obNorm((titleOf(it) || it).textContent))).pop();
+      if (after) after.after(clone); else items[0].before(clone);
+      const dd = sheet.closest('tp-yt-iron-dropdown');
+      setTimeout(() => { try { dd && dd.refit && dd.refit(); } catch {} }, 0);
+      try { refreshDownloadButtons(); } catch {}
+    }
+    // התפריט הישן (ytd-menu-popup-renderer)
     for (const dd of document.querySelectorAll('tp-yt-iron-dropdown')) {
       const list = dd.querySelector('tp-yt-paper-listbox#items');
       if (!list) continue;
-      const mine = list.querySelector(`:scope > [${DL_MENU_ITEM_ATTR}]`);
+      let mine = list.querySelector(`:scope > [${DL_MENU_ITEM_ATTR}]`);
       const open = dd.getAttribute('aria-hidden') !== 'true' && !!obVisible(dd);
       if (!want || !open) { if (mine) mine.remove(); continue; }
+      if (mine && mine.getAttribute('data-ytu-video') !== menuCtx.id) { mine.remove(); mine = null; }
       if (mine) continue;
       const items = [...list.children].filter(c => c !== mine);
       // יוטיוב כבר מציע הורדה בתפריט הזה – לא מוסיפים שנייה
@@ -2840,6 +3091,7 @@
       el.className = tpl ? tpl.className : 'style-scope ytd-menu-popup-renderer';
       for (const a of ['system-icons', 'use-icons', 'role']) if (tpl && tpl.hasAttribute(a)) el.setAttribute(a, tpl.getAttribute(a) || '');
       el.setAttribute(DL_MENU_ITEM_ATTR, '');
+      el.setAttribute('data-ytu-video', menuCtx.id);
       el.data = {
         text: { runs: [{ text: MSG.download() }] },
         icon: { iconType: 'OFFLINE_DOWNLOAD' },
@@ -2948,6 +3200,7 @@
       if (!save || !save.querySelector('svg path')) continue;
       const clone = save.cloneNode(true);
       clone.setAttribute(DL_MENU_ITEM_ATTR, '');
+      clone.setAttribute('data-ytu-video', videoId());
       const t = clone.querySelector('.ytListItemViewModelTitle');
       if (t) t.textContent = MSG.download();
       const paths = [...clone.querySelectorAll('svg path')];
@@ -3073,7 +3326,7 @@
           for (const ms of [50, 200, 500, 1000]) setTimeout(() => { try { ensureMobileSheetDownload(); } catch {} }, ms);
         }
         // www: ⋮ של הסרטון – אם יוטיוב לא שם בו "הורדה", מוסיפים
-        if (SITE === 'www' && opener.closest('ytd-watch-metadata #actions')) {
+        if (SITE === 'www' && (opener.closest('ytd-watch-metadata #actions') || path.some(el => ITEM_TAG.test(el.tagName)))) {
           for (const ms of [30, 150, 400, 900]) setTimeout(() => { try { ensureDesktopMenuDownload(); } catch {} }, ms);
         }
       }
