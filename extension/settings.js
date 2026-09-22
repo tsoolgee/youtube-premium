@@ -37,6 +37,7 @@ const SETTINGS = [
       { value: '360', label: 'בינונית (360p)', labelEn: 'Medium (360p)' },
       { value: '144', label: 'נמוכה (144p)', labelEn: 'Low (144p)' },
       { value: 'audio', label: 'שמע בלבד', labelEn: 'Audio only' },
+      { value: 'mp3', label: 'שמע בלבד (MP3)', labelEn: 'Audio only (MP3)' },
     ] },
   { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
     labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
