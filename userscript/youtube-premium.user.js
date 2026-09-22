@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.0.2
+// @version      0.0.3
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -2813,6 +2813,43 @@
     if (officialOn()) unhideOfficial();
     obBadgeCss();
     if (SITE === 'mobile') { ensureMobileDownloadButton(); ensureMobileSheetDownload(); }
+    if (SITE === 'www') ensureDesktopMenuDownload();
+  }
+
+  // www: יוטיוב לא תמיד מציע "הורדה" – לא בשורת הכפתורים ולא בתפריט ⋮ (סרטונים שגם מנוי לא יכול להוריד,
+  // חשבון מחובר עם הרבה כפתורים וכו'; דווח בפורום). ההורדה שלנו עובדת גם אז, ולכן מוסיפים לתפריט ⋮ של
+  // הסרטון פריט "הורדה" מקורי: ytd-menu-service-item-renderer שיוטיוב עצמו מצייר מ-data (טקסט + אייקון OFFLINE_DOWNLOAD).
+  function ensureDesktopMenuDownload() {
+    const rowButton = [...document.querySelectorAll('ytd-watch-metadata ytd-download-button-renderer')].some(obVisible);
+    const fromWatch = !!(lastOpener && lastOpener.el.closest('ytd-watch-metadata #actions') && Date.now() - lastOpener.at < 15000);
+    const want = officialOn() && !!videoId() && !rowButton && fromWatch;
+    for (const dd of document.querySelectorAll('tp-yt-iron-dropdown')) {
+      const list = dd.querySelector('tp-yt-paper-listbox#items');
+      if (!list) continue;
+      const mine = list.querySelector(`:scope > [${DL_MENU_ITEM_ATTR}]`);
+      const open = dd.getAttribute('aria-hidden') !== 'true' && !!obVisible(dd);
+      if (!want || !open) { if (mine) mine.remove(); continue; }
+      if (mine) continue;
+      const items = [...list.children].filter(c => c !== mine);
+      // יוטיוב כבר מציע הורדה בתפריט הזה – לא מוסיפים שנייה
+      if (items.some(it => it.matches(OFFICIAL_ITEMS) || it.querySelector('yt-download-list-item-view-model') || isDownloadText(it))) continue;
+      const first = items.find(c => c.offsetParent);
+      if (!first) continue; // התפריט עוד לא צויר
+      const tpl = list.querySelector('ytd-menu-service-item-renderer');
+      const el = document.createElement('ytd-menu-service-item-renderer');
+      el.className = tpl ? tpl.className : 'style-scope ytd-menu-popup-renderer';
+      for (const a of ['system-icons', 'use-icons', 'role']) if (tpl && tpl.hasAttribute(a)) el.setAttribute(a, tpl.getAttribute(a) || '');
+      el.setAttribute(DL_MENU_ITEM_ATTR, '');
+      el.data = {
+        text: { runs: [{ text: MSG.download() }] },
+        icon: { iconType: 'OFFLINE_DOWNLOAD' },
+        serviceEndpoint: { commandMetadata: { webCommandMetadata: { ignoreNavigation: true } } },
+      };
+      list.insertBefore(el, first);
+      // התפריט כבר מדד את עצמו – בלי refit נוצר פס גלילה
+      setTimeout(() => { try { dd.refit && dd.refit(); } catch {} try { dd.notifyResize && dd.notifyResize(); } catch {} }, 0);
+      try { refreshDownloadButtons(); } catch {}
+    }
   }
 
   // YouTube Music: תג "P" (Premium) ליד "הורדה" בתפריט – למנוי אין אותו
@@ -3034,6 +3071,10 @@
         // m.youtube: "עוד" בסרגל המצומצם – הגיליון נפתח מיד, מוסיפים לו "הורדה"
         if (SITE === 'mobile' && opener.closest('ytm-slim-video-action-bar-renderer')) {
           for (const ms of [50, 200, 500, 1000]) setTimeout(() => { try { ensureMobileSheetDownload(); } catch {} }, ms);
+        }
+        // www: ⋮ של הסרטון – אם יוטיוב לא שם בו "הורדה", מוסיפים
+        if (SITE === 'www' && opener.closest('ytd-watch-metadata #actions')) {
+          for (const ms of [30, 150, 400, 900]) setTimeout(() => { try { ensureDesktopMenuDownload(); } catch {} }, ms);
         }
       }
       return;
