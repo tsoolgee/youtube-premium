@@ -73,22 +73,16 @@ async def main():
             opts.update(user_agent=MOBILE_UA, is_mobile=True, has_touch=True, device_scale_factor=2)
         ctx = await p.chromium.launch_persistent_context(profile, **opts)
         await ctx.add_init_script(PIP_SPY)
-        # אסור לגעת בשרת ה-Drive
-        await ctx.route("**/script.google.com/**", lambda r: r.abort())
-        await ctx.route("**/script.googleusercontent.com/**", lambda r: r.abort())
-        mine = lambda x: x.url.startswith("chrome-extension://") and x.url.endswith("/background.js")
-        sw = next((x for x in ctx.service_workers if mine(x)), None)
-        while not sw:
-            x = await ctx.wait_for_event("serviceworker", timeout=30000)
-            sw = x if mine(x) else None
-        settings = {"downloadMethod": "browser", "serverUrl": "http://127.0.0.1:9"}
-        if A.speed_off:
-            settings["speed"] = False
-        await sw.evaluate("s => new Promise(r => chrome.storage.local.set({ settings: s }, r))", settings)
         page = await ctx.new_page()
         page.on("pageerror", lambda e: report.setdefault("page_errors", []).append(str(e)[:300]))
         host = "m.youtube.com" if A.mobile else "www.youtube.com"
         await page.goto(f"https://{host}/watch?v={A.video}", wait_until="domcontentloaded", timeout=120000)
+        if A.speed_off:
+            # אין service worker: שומרים דרך הגשר (ytu:save) וטוענים מחדש
+            await asyncio.sleep(3)
+            await page.evaluate("() => window.dispatchEvent(new CustomEvent('ytu:save', { detail: JSON.stringify({ speed: false }) }))")
+            await asyncio.sleep(1)
+            await page.reload(wait_until="domcontentloaded", timeout=120000)
         await asyncio.sleep(8)
         await page.evaluate("() => { const v = document.querySelector('#movie_player video, video'); v && v.play().catch(() => {}); }")
         samples = []

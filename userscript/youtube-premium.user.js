@@ -6,7 +6,7 @@
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
 // @version      0.0.1
-// @description  בלי פרסומות, ניגון ברקע, הורדת סרטונים (גם דרך שרת Drive), חלון צף, איכות מרבית ומהירויות עד פי 4
+// @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
 // @match        *://music.youtube.com/*
@@ -21,287 +21,12 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  // לקוח שרת ההורדה לדרייב (API 1.3). רץ גם ב-service worker (importScripts) וגם בתוך החבילה שבדף,
-  // ולכן בלי chrome.* ובלי DOM, וכל השמות ברמה העליונה מתחילים ב-DRIVE_ / DriveClient.
-
-  // ממסר Apps Script – נטפרי חוסם את כתובת השרת הביתי ישירות
-  const DRIVE_DEFAULT_SERVER = 'https://script.google.com/macros/s/AKfycbxewFuo8cSzfhhsGYsfwPD68MvB20UELCLXzazk6GbiWqCB5Y07IS5sYDAXjvhMVFMl/exec';
-
-  const DRIVE_ACTIVE_STATES = ['queued', 'checking', 'downloading', 'converting', 'copying', 'uploading', 'shortening'];
-
-  const DRIVE_STATE_TEXT = {
-    queued: 'ממתין בתור',
-    checking: 'בודק את הסרטון',
-    downloading: 'מוריד',
-    converting: 'ממיר',
-    copying: 'שומר בדרייב',
-    uploading: 'מעלה לדרייב',
-    shortening: 'מקצר קישור',
-    done: 'מוכן',
-    error: 'נכשל',
-  };
-
-  const DRIVE_STAGE_TEXT = {
-    netfree: 'בדיקת נטפרי',
-    info: 'קריאת פרטי הסרטון',
-    video: 'וידאו',
-    audio: 'שמע',
-    merge: 'מיזוג וידאו ושמע',
-    convert: 'המרה',
-  };
-
-  // מה המשתמש יכול לעשות עם כל שגיאה
-  const DRIVE_ERROR_HINT = {
-    NETFREE_BLOCKED: 'אפשר לבקש פתיחה מנטפרי ולנסות שוב אחרי האישור.',
-    NETFREE_PENDING: 'נטפרי עוד לא בדק את הסרטון. נסו שוב בעוד כמה דקות.',
-    NETFREE_STREAM_BLOCKED: 'הדף פתוח אבל הקובץ נחסם. אפשר לנסות איכות אחרת או שמע בלבד.',
-    VIDEO_FILE_BLOCKED: 'אפשר להוריד שמע בלבד.',
-    YT_BOT_CHECK: 'יוטיוב חסם זמנית את השרת. נסו שוב בעוד כחצי שעה, או הפעילו בהגדרות את שיתוף העוגיות.',
-    YT_PRIVATE: 'הסרטון פרטי.',
-    YT_UNAVAILABLE: 'הסרטון לא זמין.',
-    YT_AGE_RESTRICTED: 'הסרטון מוגבל לפי גיל.',
-    LIVE_NOT_SUPPORTED: 'אי אפשר להוריד שידור חי.',
-    TOO_LONG: 'הסרטון ארוך מדי לשרת.',
-    DRIVE_FULL: 'האחסון בדרייב מלא.',
-    QUEUE_FULL: 'נסו שוב בעוד כמה דקות.',
-    RATE_LIMIT: 'נסו שוב בעוד שעה.',
-    UNAUTHORIZED: 'מפתח ה-API בהגדרות שגוי – מחקו אותו או תקנו.',
-    JOB_NOT_FOUND: 'השרת הופעל מחדש. התחילו את ההורדה שוב.',
-    NETWORK: 'נסו שוב.',
-    SERVER_OFFLINE: 'השרת כבוי או שהמחשב לא מחובר. נסו שוב מאוחר יותר.',
-    CLIENT_BLOCKED: 'כתובת השרת חסומה בסינון. בהגדרות צריך להיות כתובת ה-Apps Script.',
-    BAD_RESPONSE: 'נסו שוב בעוד רגע.',
-    DRIVE_UPLOAD_TIMEOUT: 'הקובץ נשמר; ייתכן שיופיע בתיקייה בהמשך.',
-    NOT_LOGGED_IN: 'התחברו ליוטיוב בדפדפן ונסו שוב.',
-    NO_COOKIE_ACCESS: 'אשרו לתוסף גישה לעוגיות ונסו שוב.',
-    COOKIES_INVALID: 'העוגיות לא עבדו. התחברו מחדש ליוטיוב ונסו שוב.',
-    COOKIES_DISABLED: 'השרת לא מקבל עוגיות כרגע.',
-  };
-
-  const DRIVE_QUALITIES = {
-    audio: [{ value: 'mp3', label: 'MP3' }, { value: 'm4a', label: 'M4A' }],
-    video: [
-      { value: 'best', label: 'הכי טובה' },
-      { value: '1080', label: '1080p' },
-      { value: '720', label: '720p' },
-      { value: '480', label: '480p' },
-      { value: '360', label: '360p' },
-    ],
-  };
-
-  const DriveClient = (() => {
-    // שגיאות שלא אומרות כלום על העבודה עצמה – השרת/הממסר פשוט לא ענו כרגע
-    const TRANSIENT = ['SERVER_OFFLINE', 'CLIENT_BLOCKED', 'BAD_RESPONSE'];
-    const AUTH_COOKIES = ['SAPISID', '__Secure-3PSID', '__Secure-1PSID', '__Secure-3PAPISID', 'SID'];
-    const ORPHAN_MS = 90000;
-    const TAB = String.fromCharCode(9);
-    const NL = String.fromCharCode(10);
-
-    const client = {
-      retryDelay: 1500,   // ניתן לשינוי בבדיקות
-      timeout: 60000,
-    };
-
-    const err = (code, message, detail) => ({ ok: false, error: detail ? { code, message, detail } : { code, message } });
-
-    function serverOf(settings) {
-      return String((settings && settings.serverUrl) || DRIVE_DEFAULT_SERVER).trim().replace(/\/+$/, '');
-    }
-
-    function isRelay(server) {
-      return /^https:\/\/script\.google\.com\/macros\/s\//.test(server);
-    }
-
-    async function apiOnce(settings, path, body) {
-      const server = serverOf(settings);
-      const key = (settings && settings.apiKey) || '';
-      const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), client.timeout) : null;
-      let res, text;
-      try {
-        if (isRelay(server)) {
-          // ממסר: הכול ב-POST אחד בלי preflight, והמפתח בגוף ולא בכתובת. redirect חובה (googleusercontent)
-          res = await fetch(server, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ path, key, body: body === undefined ? undefined : body }),
-            redirect: 'follow',
-            cache: 'no-store',
-            signal: ctrl ? ctrl.signal : undefined,
-          });
-        } else {
-          const headers = { 'Content-Type': 'application/json' };
-          if (key) headers['X-API-Key'] = key;
-          res = await fetch(server + path, {
-            method: body === undefined ? 'GET' : 'POST',
-            headers,
-            body: body === undefined ? undefined : JSON.stringify(body),
-            cache: 'no-store',
-            signal: ctrl ? ctrl.signal : undefined,
-          });
-        }
-        text = await res.text();
-      } catch (e) {
-        return err('SERVER_OFFLINE', 'אין חיבור לשרת ההורדה');
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-      // נטפרי אצל המשתמש חוסם את הכתובת: 418, לפעמים עם גוף משלו
-      if (res.status === 418 || /blockByNetFree|netfree\.link\/block/i.test(text)) {
-        return err('CLIENT_BLOCKED', 'כתובת שרת ההורדה חסומה בסינון במחשב הזה');
-      }
-      let data = null;
-      try { data = JSON.parse(text); } catch (e) {}
-      if (data && typeof data === 'object' && typeof data.ok === 'boolean') {
-        if (!data.ok && !data.error) data.error = { code: 'BAD_RESPONSE', message: 'תשובה לא צפויה מהשרת' };
-        return data;
-      }
-      // דף שגיאה של Cloudflare כשהמחשב או השרת כבויים
-      if (res.status === 502 || res.status === 503 || res.status >= 520) {
-        return err('SERVER_OFFLINE', 'שרת ההורדה לא זמין כרגע');
-      }
-      return err('BAD_RESPONSE', 'תשובה לא צפויה מהשרת (' + res.status + ')');
-    }
-
-    // גוגל מחזיר לא מעט פעמים דף שגיאה ("לא ניתן לפתוח את הקובץ כרגע") במקום תשובת הסקריפט,
-    // גם כשהבקשה כבר הגיעה לשרת. /download בטוח לשליחה חוזרת (השרת מחזיר את אותו קובץ מהמטמון),
-    // אז מנסים שוב כמה פעמים עם המתנה הולכת וגדלה לפני שמוותרים.
-    client.attempts = 6;
-    client.api = async function api(settings, path, body) {
-      for (let attempt = 1; ; attempt++) {
-        const r = await apiOnce(settings, path, body);
-        if (!r.error || r.error.code !== 'BAD_RESPONSE' || attempt >= client.attempts) return r;
-        await new Promise(done => setTimeout(done, client.retryDelay * attempt));
-      }
-    };
-
-    client.videoIdFromUrl = function videoIdFromUrl(url) {
-      try {
-        const u = new URL(url);
-        const host = u.hostname.replace(/^(www|m|music)\./, '');
-        if (host === 'youtu.be') return u.pathname.slice(1, 12) || null;
-        if (host === 'youtube.com') {
-          if (u.searchParams.get('v')) return u.searchParams.get('v');
-          const m = u.pathname.match(/^\/(shorts|live|embed)\/([\w-]{11})/);
-          if (m) return m[2];
-        }
-      } catch (e) {}
-      return null;
-    };
-
-    client.isActive = job => !!job && DRIVE_ACTIVE_STATES.includes(job.state);
-
-    client.newJob = function newJob({ url, videoId, type, quality, title } = {}) {
-      const id = videoId || (url ? client.videoIdFromUrl(url) : null);
-      type = type === 'video' ? 'video' : 'audio';
-      const allowed = DRIVE_QUALITIES[type].map(q => q.value);
-      return {
-        localId: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-        url: url || (id ? 'https://www.youtube.com/watch?v=' + id : ''),
-        videoId: id || '',
-        type,
-        quality: allowed.includes(String(quality)) ? String(quality) : allowed[0],
-        title: title || '',
-        state: 'queued',
-        created: Date.now(),
-      };
-    };
-
-    // שולח את העבודה לשרת ומחזיר עותק מעודכן (לא משנה את המקור)
-    client.start = async function start(settings, job) {
-      const j = Object.assign({}, job);
-      delete j.jobId; delete j.error; delete j.offlineSince;
-      if (!j.url) return Object.assign(j, { state: 'error', error: { code: 'BAD_URL', message: 'אין קישור לסרטון' } });
-      const r = await client.api(settings, '/download', { url: j.url, type: j.type, quality: j.quality });
-      if (!r.ok || !r.job_id) {
-        return Object.assign(j, { state: 'error', error: r.error || { code: 'BAD_RESPONSE', message: 'תשובה לא צפויה מהשרת' } });
-      }
-      return Object.assign(j, { jobId: r.job_id, state: r.state || 'queued', startedAt: Date.now() });
-    };
-
-    // בודק מצב עבודה אחת. תקלה זמנית לא הורסת את העבודה – רק מסמנת offlineSince
-    client.poll = async function poll(settings, job) {
-      if (!client.isActive(job)) return job;
-      if (!job.jobId) {
-        // העבודה לא קיבלה מספר מהשרת (ה-worker/הדף נעצרו באמצע השליחה)
-        if (Date.now() - (job.created || 0) > ORPHAN_MS) {
-          return Object.assign({}, job, { state: 'error', error: { code: 'SERVER_OFFLINE', message: 'הבקשה לא הגיעה לשרת' } });
-        }
-        return job;
-      }
-      const r = await client.api(settings, '/status/' + encodeURIComponent(job.jobId));
-      const j = Object.assign({}, job);
-      if (!r.ok) {
-        if (r.error && TRANSIENT.includes(r.error.code)) {
-          j.offlineSince = j.offlineSince || Date.now();
-          return j;
-        }
-        delete j.offlineSince;
-        return Object.assign(j, { state: 'error', error: r.error });
-      }
-      delete j.offlineSince;
-      Object.assign(j, {
-        state: r.state || j.state,
-        stage: r.stage || '',
-        percent: typeof r.percent === 'number' ? r.percent : null,
-        position: r.position,
-        title: r.title || j.title,
-        short_url: r.short_url, drive_url: r.drive_url, view_url: r.view_url,
-        size: r.size, cached: r.cached,
-      });
-      if (j.state === 'error') j.error = r.error || { code: 'DOWNLOAD_FAILED', message: 'ההורדה נכשלה' };
-      else delete j.error;
-      return j;
-    };
-
-    // קלט: מערך עוגיות בפורמט chrome.cookies. פלט: קובץ Netscape ש-yt-dlp מבין
-    client.toNetscape = function toNetscape(cookies) {
-      const seen = new Set();
-      const lines = ['# Netscape HTTP Cookie File'];
-      let hasAuth = false;
-      for (const c of cookies || []) {
-        if (!c || !c.name || !c.domain) continue;
-        const name = String(c.name), value = String(c.value == null ? '' : c.value);
-        // תו טאב/ירידת שורה ישבור את הקובץ
-        if ((name + value).indexOf(TAB) >= 0 || (name + value).indexOf(NL) >= 0) continue;
-        const domain = c.domain.charAt(0) === '.' ? c.domain : '.' + c.domain;
-        const path = c.path || '/';
-        const k = domain + ' ' + path + ' ' + name;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        lines.push([domain, 'TRUE', path, c.secure ? 'TRUE' : 'FALSE', Math.round(c.expirationDate || 0), name, value].join(TAB));
-        if (AUTH_COOKIES.includes(name) && value) hasAuth = true;
-      }
-      if (!hasAuth) return err('NOT_LOGGED_IN', 'לא נמצא חיבור פעיל ליוטיוב. התחברו ליוטיוב בדפדפן ונסו שוב');
-      return { ok: true, text: lines.join(NL) + NL };
-    };
-
-    // גיבוי מהדפדפן לשרת: גובה הווידאו שנבחר (או null לשמע) → איכות מקבילה בשרת
-    client.mapBrowserQuality = function mapBrowserQuality(height) {
-      const hgt = Number(height);
-      if (!height || !hgt) return { type: 'audio', quality: 'm4a' };
-      if (hgt > 1080) return { type: 'video', quality: 'best' };
-      if (hgt >= 1080) return { type: 'video', quality: '1080' };
-      if (hgt >= 720) return { type: 'video', quality: '720' };
-      if (hgt >= 480) return { type: 'video', quality: '480' };
-      return { type: 'video', quality: '360' };
-    };
-
-    client.hint = code => DRIVE_ERROR_HINT[code] || '';
-    client.isRelay = server => isRelay(serverOf({ serverUrl: server }));
-
-    return client;
-  })();
-
-  // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, ל-service worker ולסקריפט הטמפרמונקי.
-  // type: bool / select / text. secret לא מגיע לדף בתוסף. extensionOnly מוסתר בטמפרמונקי.
-  // popupOnly: בתוסף נערך רק בחלון התוסף – הדף (וכל סקריפט אחר שרץ בו) לא יכול לשנות אותו.
-  // drive-client.js נטען לפני הקובץ הזה בכל ההקשרים; בגשר (bridge) הוא לא נטען, ולכן יש ברירת מחדל.
+  // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
+  // type: bool / select.
   const SETTING_GROUPS = [
     { id: 'ads', label: 'פרסומות', labelEn: 'Ads' },
     { id: 'watch', label: 'צפייה', labelEn: 'Playback' },
     { id: 'download', label: 'הורדות', labelEn: 'Downloads' },
-    { id: 'drive', label: 'שרת Drive', labelEn: 'Drive server' },
   ];
 
   // labelEn / descEn: כשממשק יוטיוב לא בעברית
@@ -336,25 +61,8 @@
         { value: '144', label: 'נמוכה (144p)', labelEn: 'Low (144p)' },
         { value: 'audio', label: 'שמע בלבד', labelEn: 'Audio only' },
       ] },
-    { key: 'downloadMethod', type: 'select', group: 'download', def: 'auto', label: 'שיטת הורדה', desc: 'באוטומטי: קודם בדפדפן, ואם נכשל – דרך השרת',
-      labelEn: 'Download method', descEn: 'Automatic: in the browser first, then through the server if that fails',
-      options: [
-        { value: 'auto', label: 'אוטומטי', labelEn: 'Automatic' },
-        { value: 'browser', label: 'רק בדפדפן', labelEn: 'Browser only' },
-        { value: 'server', label: 'רק דרך השרת', labelEn: 'Server only' },
-      ] },
     { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
       labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
-
-    { key: 'serverUrl', type: 'text', group: 'drive', popupOnly: true, label: 'כתובת השרת', desc: 'כתובת ה-Apps Script של הממסר (ריק = ברירת המחדל)',
-      labelEn: 'Server address', descEn: 'Relay Apps Script URL (empty = default)',
-      def: typeof DRIVE_DEFAULT_SERVER !== 'undefined' ? DRIVE_DEFAULT_SERVER
-        : 'https://script.google.com/macros/s/AKfycbxewFuo8cSzfhhsGYsfwPD68MvB20UELCLXzazk6GbiWqCB5Y07IS5sYDAXjvhMVFMl/exec' },
-    { key: 'apiKey', type: 'text', group: 'drive', def: '', secret: true, label: 'מפתח API', desc: 'רק אם השרת דורש מפתח',
-      labelEn: 'API key', descEn: 'Only if the server requires one' },
-    { key: 'shareCookies', type: 'bool', group: 'drive', def: false, confirm: 'cookies', extensionOnly: true, popupOnly: true, label: 'שיתוף עוגיות יוטיוב',
-      desc: 'כשיוטיוב חוסם את השרת ("אמתו שאתם לא בוט") – שולח לשרת את החיבור שלכם ליוטיוב. כבוי כברירת מחדל',
-      labelEn: 'Share YouTube cookies', descEn: 'When YouTube blocks the server ("confirm you’re not a bot"), sends your YouTube sign-in to the server. Off by default' },
   ];
 
   const DEFAULTS = Object.fromEntries(SETTINGS.map(s => [s.key, s.def]));
@@ -369,203 +77,23 @@
     return out;
   }
 
-  // נוסח האזהרה לפני הפעלת שיתוף העוגיות (בחלון התוסף)
-  const COOKIE_WARNING = {
-    title: 'שיתוף עוגיות יוטיוב עם השרת',
-    text: [
-      'כשיוטיוב חוסם את שרת ההורדה, התוסף ישלח לשרת את עוגיות ההתחברות שלכם ליוטיוב ולגוגל, כדי שההורדה תיעשה בשם החשבון שלכם.',
-      'העוגיות נותנות גישה לחשבון הגוגל שמחובר בדפדפן הזה (מייל, דרייב, יוטיוב). מומלץ מאוד להשתמש בחשבון משני ולא בחשבון הראשי.',
-      'העוגיות נשמרות רק בשרת ההורדה הביתי ומשמשות רק להורדות. הן לא נשמרות בתוסף ולא נשלחות לשום מקום אחר.',
-      'הן יישלחו רק אם השרת מוגדר לקבל עוגיות, ורק כשהורדה נחסמה או כשלוחצים "שתפו עוגיות עכשיו". שינוי כתובת השרת מכבה את השיתוף.',
-    ],
-    ok: 'מבין, להפעיל',
-    cancel: 'ביטול',
-  };
-  const COOKIE_WARNING_EN = {
-    title: 'Share YouTube cookies with the server',
-    text: [
-      'When YouTube blocks the download server, the extension will send your YouTube and Google sign-in cookies to the server so the download runs as your account.',
-      'The cookies give access to the Google account signed in to this browser (Gmail, Drive, YouTube). Using a secondary account, not your main one, is strongly recommended.',
-      'The cookies are kept only on the home download server and used only for downloads. They are not stored in the extension or sent anywhere else.',
-      'They are sent only if the server accepts cookies, and only when a download was blocked or when you press "Share cookies now". Changing the server address turns sharing off.',
-    ],
-    ok: 'I understand, turn on',
-    cancel: 'Cancel',
-  };
-
-  // מפתחות שלא עוברים לדף בתוסף
-  const SECRET_KEYS = SETTINGS.filter(s => s.secret).map(s => s.key);
-  // מפתחות שהדף לא יכול לשנות בתוסף: סודות, כתובת השרת (אליה נשלחים המפתח והעוגיות) וההסכמה לעוגיות
-  const PAGE_LOCKED_KEYS = SETTINGS.filter(s => s.secret || s.popupOnly).map(s => s.key);
-
-  // מה נשמר באחסון: כתובת השרת שווה לברירת המחדל לא נשמרת, כדי שעדכון הממסר בגרסה חדשה יגיע לכולם
-  function storableSettings(settings) {
-    const out = { ...(settings || {}) };
-    if (!out.serverUrl || String(out.serverUrl).trim() === DEFAULTS.serverUrl) delete out.serverUrl;
-    return out;
-  }
-
   // גרסת הטמפרמונקי (@grant none): ההגדרות ב-localStorage של יוטיוב.
-  // שרת ה-Drive: הממסר נגיש ב-fetch ישירות מהדף, אז DriveClient רץ כאן והעבודות נשמרות ב-localStorage.
-  const Platform = (() => {
-    const JOBS_KEY = 'ytu-drive-jobs';
-    const LEASE_KEY = 'ytu-drive-poller';
-    const MAX_JOBS = 30;
-    const POLL_MS = 5000;
-    const tabId = Math.random().toString(36).slice(2);
-
-    const load = () => {
+  const Platform = {
+    kind: 'userscript',
+    load() {
       try { return JSON.parse(localStorage.getItem('ytu-settings')) || {}; } catch { return {}; }
-    };
-    const driveSettings = () => {
-      const s = { ...DEFAULTS, ...load() };
-      return { serverUrl: s.serverUrl, apiKey: s.apiKey || '' };
-    };
-    const hasClient = () => typeof DriveClient !== 'undefined';
-    const noClient = () => ({ ok: false, error: { code: 'INTERNAL', message: 'רכיב השרת לא נטען' } });
-    const isActive = j => !!j && (hasClient() ? DriveClient.isActive(j) : ['queued', 'checking', 'downloading', 'converting', 'copying', 'uploading', 'shortening'].includes(j.state));
-
-    const readJobs = () => {
-      try {
-        const list = JSON.parse(localStorage.getItem(JOBS_KEY));
-        return Array.isArray(list) ? list : [];
-      } catch { return []; }
-    };
-    const writeJobs = list => {
-      try { localStorage.setItem(JOBS_KEY, JSON.stringify(list.slice(0, MAX_JOBS))); } catch {}
-    };
-
-    const listeners = [];
-    const emit = job => {
-      for (const cb of listeners) {
-        try { cb(job); } catch {}
-      }
-    };
-
-    // מחליף עבודה לפי localId על גבי הרשימה העדכנית (לשונית אחרת אולי הוסיפה בינתיים)
-    const putJob = job => {
-      const list = readJobs();
-      const i = list.findIndex(x => x.localId === job.localId);
-      if (i >= 0) list[i] = job;
-      else list.unshift(job);
-      writeJobs(list);
-      emit(job);
-    };
-
-    // כמה לשוניות יוטיוב פתוחות – רק אחת בודקת מול השרת (כל בדיקה עולה מהמכסה של הממסר).
-    // בזמן בדיקה החכירה ארוכה מקריאה אחת לממסר (עד 3 ניסיונות של timeout), כדי שלשונית אחרת לא תיכנס באמצע.
-    const callBudget = () => (hasClient() ? (DriveClient.timeout || 60000) + (DriveClient.retryDelay || 1500) : 60000) * 3 + 5000;
-    const takeLease = ms => {
-      try {
-        const lease = JSON.parse(localStorage.getItem(LEASE_KEY) || 'null');
-        if (lease && lease.tab !== tabId && Date.now() < lease.until) return false;
-        localStorage.setItem(LEASE_KEY, JSON.stringify({ tab: tabId, until: Date.now() + ms }));
-        return true;
-      } catch { return true; }
-    };
-    // לשונית שנסגרת משחררת את החכירה מיד
-    window.addEventListener('pagehide', () => {
-      try {
-        const lease = JSON.parse(localStorage.getItem(LEASE_KEY) || 'null');
-        if (lease && lease.tab === tabId) localStorage.removeItem(LEASE_KEY);
-      } catch {}
-    });
-
-    let timer = null, polling = false;
-    async function pollOnce() {
-      if (polling || !hasClient()) return;
-      const active = readJobs().filter(isActive);
-      if (!active.length) {
-        clearInterval(timer);
-        timer = null;
-        return;
-      }
-      if (!takeLease(POLL_MS * 3)) return;
-      polling = true;
-      try {
-        const settings = driveSettings();
-        for (const job of active) {
-          // חידוש לפני כל קריאה; אם לשונית אחרת לקחה בינתיים – עוצרים
-          if (!takeLease(callBudget())) break;
-          let next;
-          try { next = await DriveClient.poll(settings, job); } catch { continue; }
-          if (!next || JSON.stringify(next) === JSON.stringify(job)) continue;
-          // כותבים רק אם העבודה השמורה לא השתנתה מאז שנקראה – תשובה ישנה לא דורסת מצב חדש
-          const stored = readJobs().find(x => x.localId === job.localId);
-          if (!stored || JSON.stringify(stored) !== JSON.stringify(job)) continue;
-          putJob(next);
-        }
-      } finally {
-        polling = false;
-        takeLease(POLL_MS * 3);
-      }
-    }
-
-    function ensurePolling() {
-      if (timer || !readJobs().some(isActive)) return;
-      timer = setInterval(pollOnce, POLL_MS);
-    }
-
-    // עדכונים שלשונית אחרת כתבה
-    window.addEventListener('storage', e => {
-      if (e.key !== JOBS_KEY) return;
-      let prev = [], next = [];
-      try { prev = JSON.parse(e.oldValue) || []; } catch {}
-      try { next = JSON.parse(e.newValue) || []; } catch {}
-      const before = new Map(prev.map(j => [j.localId, JSON.stringify(j)]));
-      for (const j of next) if (before.get(j.localId) !== JSON.stringify(j)) emit(j);
-      ensurePolling();
-    });
-
-    // אחרי רענון – ממשיכים לעקוב אחרי עבודות שעוד רצות
-    setTimeout(ensurePolling, 2000);
-
-    return {
-      kind: 'userscript',
-      load,
-      save(s) {
-        try { localStorage.setItem('ytu-settings', JSON.stringify(s)); } catch {}
-      },
-      onChange(cb) {
-        window.addEventListener('storage', e => {
-          if (e.key !== 'ytu-settings') return;
-          try { cb(JSON.parse(e.newValue) || {}); } catch {}
-        });
-      },
-      onCommand() {},
-      drive: {
-        canShareCookies: false,
-        async health() {
-          if (!hasClient()) return noClient();
-          try { return await DriveClient.api(driveSettings(), '/health'); } catch { return noClient(); }
-        },
-        async start(opts) {
-          if (!hasClient()) return noClient();
-          const settings = driveSettings();
-          let job = DriveClient.newJob(opts || {});
-          putJob(job);
-          try {
-            job = await DriveClient.start(settings, job);
-          } catch {
-            job = { ...job, state: 'error', error: { code: 'INTERNAL', message: 'שליחת ההורדה נכשלה' } };
-          }
-          putJob(job);
-          ensurePolling();
-          return job.state === 'error' ? { ok: false, job, error: job.error } : { ok: true, job };
-        },
-        async jobs() {
-          ensurePolling();
-          return readJobs();
-        },
-        onJob(cb) {
-          if (typeof cb === 'function') listeners.push(cb);
-        },
-        async shareCookies() {
-          return { ok: false, error: { code: 'UNSUPPORTED', message: 'שיתוף עוגיות זמין רק בגרסת התוסף לכרום' } };
-        },
-      },
-    };
-  })();
+    },
+    save(s) {
+      try { localStorage.setItem('ytu-settings', JSON.stringify(s)); } catch {}
+    },
+    onChange(cb) {
+      window.addEventListener('storage', e => {
+        if (e.key !== 'ytu-settings') return;
+        try { cb(JSON.parse(e.newValue) || {}); } catch {}
+      });
+    },
+    onCommand() {},
+  };
 
   // מיזוג קובצי DASH של יוטיוב (MP4 מפוצל) לקובץ MP4 אחד – בלי ffmpeg.
   // כל קלט הוא קובץ שלם עם moov אחד ורצף של moof+mdat. הפלט: moov משותף
@@ -2305,16 +1833,6 @@
     setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
   }
 
-  // ---------- שרת ה-Drive: קבועים מ-drive-client.js, עם גיבוי אם הקובץ חסר ----------
-
-  const DL_FALLBACK_ACTIVE = ['queued', 'checking', 'downloading', 'converting', 'copying', 'uploading', 'shortening'];
-
-  const dActive = () => (typeof DRIVE_ACTIVE_STATES !== 'undefined' && DRIVE_ACTIVE_STATES) || DL_FALLBACK_ACTIVE;
-  const dHint = code => ((typeof DRIVE_ERROR_HINT !== 'undefined' && DRIVE_ERROR_HINT) || {})[code] || '';
-  const hasDrive = () => typeof Platform !== 'undefined' && !!Platform.drive && typeof Platform.drive.start === 'function';
-  const isActiveJob = j => dActive().includes(j.state);
-  const dlMethod = () => (['auto', 'browser', 'server'].includes(S.downloadMethod) ? S.downloadMethod : 'auto');
-
   function pageTitle(id) {
     if (id && id !== videoId()) return '';
     try { const t = player()?.getVideoData?.()?.title; if (t) return t; } catch {}
@@ -2329,7 +1847,7 @@
   // כמה הורדות: תור (כמו manualSessionTotalDownloads של יוטיוב) – "ההורדה מתבצעת... 2/1".
   // כישלון: הכפתור עובר ל"ניסיון חוזר" (TRANSFER_STATE_FAILED / ACTION_RETRY).
   // www: דף "הורדות" (/feed/downloads, FEdownloads) – יוטיוב מצייר אותו בעצמו; אנחנו רק ממלאים את הרשימה.
-  // השרת (Drive) עובד מאחורי הקלעים לפי downloadMethod: ב-auto – דפדפן, ובכישלון שרת בלי לשאול.
+  // ההורדה כולה בדפדפן (VISIONOS → fetch בטווחים → Mux / MP3), בלי שום שרת חיצוני.
 
   // סולם האיכויות של Premium בדסקטופ (השמות מגיעים מהשרת; "שמע בלבד" נשאר אחרון – יש אותו רק אצלנו)
   const DL_CHOICES = [
@@ -2407,15 +1925,13 @@
     delete: () => ytMsg('DELETE', 'מחיקה', 'Delete'),
   };
 
-  let dlBusy = null;      // הורדה שרצה עכשיו: { id, abort?, kind: 'browser'|'server', localId?, percent, preparing }
+  let dlBusy = null;      // הורדה שרצה עכשיו: { id, choice, abort, percent, preparing, converting? }
   const dlQueue = [];     // הורדות שמחכות: [{ id, choice }]
   const dlSession = { total: 0, done: 0 }; // כמו manualSessionTotalDownloads / manualSessionDownloaded
   let dlToast = null, dlToastClosed = false, dlToastHold = 0;
   const dlFailed = new Map();     // id → הבחירה האחרונה (הכפתור מציג "ניסיון חוזר")
   let dlDialog = null;    // { id, close, back }
-  let dlListening = false;
   const dlInfo = new Map();       // id → Promise<info> (רשימת הפורמטים, לגדלים בדיאלוג ולהורדה)
-  const dlServerJobs = new Map(); // localId → { id, choice, meta }
 
   const isDownloadBusy = () => !!dlBusy || dlQueue.length > 0;
   const dlIsQueued = id => dlQueue.some(q => q.id === id);
@@ -2527,7 +2043,7 @@
     const opts = {
       // כמו ytd-video-download-toast-renderer: רק "יורד..." או היחס, ו-KEEP_OPEN (ההכנה נראית רק בטבעת שבכפתור)
       text: total > 1 ? MSG.ratio(Math.min(total, dlSession.done + 1), total) : MSG.downloading() + '...',
-      sub: busy.kind === 'browser' ? MSG.keepOpen() : null,
+      sub: MSG.keepOpen(),
       action: dlViewAction(),
       close: true,
       onClose: () => { dlToastClosed = true; },
@@ -2540,9 +2056,9 @@
     dlToast = ytToast(opts);
   }
 
-  // ---------- יציאה מהדף באמצע הורדה בדפדפן / כשיש תור (כמו boundBeforeUnload של יוטיוב) ----------
+  // ---------- יציאה מהדף באמצע הורדה / כשיש תור (כמו boundBeforeUnload של יוטיוב) ----------
 
-  const dlWantsUnloadGuard = () => !!((dlBusy && dlBusy.kind === 'browser') || dlQueue.length);
+  const dlWantsUnloadGuard = () => !!(dlBusy || dlQueue.length);
   function dlBeforeUnload(e) {
     if (!dlWantsUnloadGuard()) return;
     e.preventDefault();
@@ -2950,7 +2466,7 @@
     let undo;
     if (busy) {
       const choice = busy.choice;
-      if (busy.kind === 'browser') dlCancel(busy); else dlForgetServer(busy);
+      dlCancel(busy);
       undo = () => startDownload(id, choice);
     } else if (queued) {
       dlUnqueue(id);
@@ -2994,8 +2510,7 @@
       dlButton(okLabel, 'dq-ok', () => {
         dlg.close(true);
         const busy = dlBusy && dlBusy.id === id ? dlBusy : null;
-        if (busy && busy.kind === 'browser') dlCancel(busy);
-        else if (busy) dlForgetServer(busy);
+        if (busy) dlCancel(busy);
         else if (dlIsQueued(id)) dlUnqueue(id);
         else dlSetDone(id, false);
       }),
@@ -3011,7 +2526,6 @@
   function openQualityDialog(id, again) {
     if (isDownloadViewOpen(id) && !again) return;
     closeDownloadDialog();
-    const method = hasDrive() ? dlMethod() : 'browser';
     let chosen = null;
     const asides = new Map();
     let dlg;
@@ -3051,27 +2565,19 @@
     dlDialog = { id, close: dlg.close, back: dlg.back };
     cancelBtn.focus();
 
-    // גדלים לפי מה שיוטיוב מחזיר (לא בשיטת "רק שרת")
-    if (method !== 'server') {
-      dlGetInfo(id).then(info => {
-        if (!dlg.back.isConnected) return;
-        // עכשיו יודעים מה יוטיוב מציע לסרטון הזה – מציגים את כל האיכויות
-        asides.clear();
-        fill(list, ...makeRows(dlChoices(info)));
-        for (const [value, aside] of asides) aside.textContent = dlSizeText(info, value);
-      }).catch(() => {});
-    }
+    // גדלים לפי מה שיוטיוב מחזיר
+    dlGetInfo(id).then(info => {
+      if (!dlg.back.isConnected) return;
+      // עכשיו יודעים מה יוטיוב מציע לסרטון הזה – מציגים את כל האיכויות
+      asides.clear();
+      fill(list, ...makeRows(dlChoices(info)));
+      for (const [value, aside] of asides) aside.textContent = dlSizeText(info, value);
+    }).catch(() => {});
   }
 
   function dlCancel(busy) {
     if (!busy || dlBusy !== busy) return;
     if (busy.abort) busy.abort.abort();
-    dlFinish(busy, null, true);
-  }
-
-  function dlForgetServer(busy) {
-    if (!busy || dlBusy !== busy) return;
-    if (busy.localId) dlServerJobs.delete(busy.localId);
     dlFinish(busy, null, true);
   }
 
@@ -3095,10 +2601,7 @@
   // סוף הורדה אחת (הצלחה / כישלון / ביטול): משחררים, מעדכנים את הכפתור ואת הטוסט וממשיכים בתור.
   // endToast: הטוסט שמוצג בסוף (אם התור ריק; שגיאה מוצגת גם באמצע תור). cancelled: לא נספר כהורדה
   function dlFinish(busy, endToast, cancelled) {
-    if (busy) {
-      if (dlBusy === busy) dlBusy = null;
-      clearTimeout(busy.resync);
-    }
+    if (busy && dlBusy === busy) dlBusy = null;
     if (cancelled) dlSession.total = Math.max(0, dlSession.total - 1);
     else dlSession.done++;
     const more = dlQueue.length > 0;
@@ -3126,51 +2629,7 @@
 
   const DL_ERRORS = {
     BLOCKED_418: ['הבקשה נחסמה (ייתכן שהסינון חוסם את הסרטון)', 'The request was blocked (a content filter may be blocking this video)'],
-    NETFREE_BLOCKED: ['הסרטון חסום בסינון. אפשר לבקש פתיחה ולנסות שוב אחרי האישור.', 'The video is blocked by the content filter. You can request access and try again.'],
-    NETFREE_PENDING: ['הסינון עוד לא בדק את הסרטון. נסו שוב בעוד כמה דקות.', "The content filter hasn't checked this video yet. Try again in a few minutes."],
-    NETFREE_STREAM_BLOCKED: ['קובץ הווידאו נחסם בסינון. אפשר להוריד שמע בלבד.', 'The video file is blocked by the content filter. You can download audio only.'],
-    VIDEO_FILE_BLOCKED: ['קובץ הווידאו נחסם בסינון. אפשר להוריד שמע בלבד.', 'The video file is blocked by the content filter. You can download audio only.'],
-    YT_PRIVATE: ['הסרטון פרטי.', 'This video is private.'],
-    YT_UNAVAILABLE: ['הסרטון לא זמין.', 'This video is unavailable.'],
-    YT_AGE_RESTRICTED: ['הסרטון מוגבל לפי גיל.', 'This video is age-restricted.'],
-    LIVE_NOT_SUPPORTED: ['אי אפשר להוריד שידור חי.', "Live streams can't be downloaded."],
-    TOO_LONG: ['הסרטון ארוך מדי לשרת ההורדה.', 'This video is too long for the download server.'],
-    DRIVE_FULL: ['האחסון בדרייב מלא.', 'Google Drive storage is full.'],
-    QUEUE_FULL: ['שרת ההורדה עמוס. נסו שוב בעוד כמה דקות.', 'The download server is busy. Try again in a few minutes.'],
-    RATE_LIMIT: ['יותר מדי הורדות. נסו שוב בעוד שעה.', 'Too many downloads. Try again in an hour.'],
-    UNAUTHORIZED: ['מפתח ה-API של שרת ההורדה שגוי.', 'The download server API key is wrong.'],
-    SERVER_OFFLINE: ['שרת ההורדה לא זמין כרגע. נסו שוב מאוחר יותר.', 'The download server is offline. Try again later.'],
-    CLIENT_BLOCKED: ['כתובת שרת ההורדה חסומה בסינון.', 'The download server address is blocked by the content filter.'],
-    NETWORK: ['אין חיבור לשרת ההורדה. נסו שוב.', "Couldn't reach the download server. Try again."],
-    TIMEOUT: ['התוסף לא ענה בזמן. נסו שוב.', "The extension didn't respond in time. Try again."],
-    JOB_NOT_FOUND: ['שרת ההורדה הופעל מחדש. התחילו את ההורדה שוב.', 'The download server restarted. Start the download again.'],
-    BAD_RESPONSE: ['תשובה לא צפויה משרת ההורדה. נסו שוב בעוד רגע.', 'Unexpected response from the download server. Try again in a moment.'],
-    DOWNLOAD_FAILED: ['ההורדה בשרת נכשלה.', 'The download failed on the server.'],
-    EXTENSION_ERROR: ['אין חיבור לתוסף. רעננו את הדף ונסו שוב.', "Can't reach the extension. Reload the page and try again."],
-    UNSUPPORTED: ['לא זמין בגרסה הזו.', 'Not available in this version.'],
   };
-
-  // טוסט כישלון של השרת: "ההורדה נכשלה" ("האחסון מלא" כשהדרייב מלא), והסבר קצר לפי קוד כשיש
-  function dlServerFailToast(err) {
-    const code = err && err.code;
-    if (code === 'DRIVE_FULL') return { text: MSG.storageFull() };
-    let sub = DL_ERRORS[code] ? dlErrorDetail(err) : '';
-    if (code === 'YT_BOT_CHECK') {
-      sub = Platform.drive.canShareCookies && !S.shareCookies
-        ? dlT('יוטיוב חסם זמנית את שרת ההורדה. אפשר להפעיל "שיתוף עוגיות" בחלון התוסף.', 'YouTube temporarily blocked the download server. You can turn on "Share cookies" in the extension popup.')
-        : dlT('יוטיוב חסם זמנית את שרת ההורדה. נסו שוב בעוד כחצי שעה.', 'YouTube temporarily blocked the download server. Try again in about half an hour.');
-    }
-    return { text: MSG.failed(), sub: sub || null };
-  }
-
-  // הסבר לפי קוד; בעברית אפשר גם את ההודעה מהשרת
-  function dlErrorDetail(err) {
-    err = err || {};
-    const known = DL_ERRORS[err.code];
-    if (known) return dlT(known[0], known[1]);
-    if (typeof uiHebrew === 'function' && !uiHebrew()) return '';
-    return [err.message, dHint(err.code)].filter(Boolean).join(' ');
-  }
 
   // ---------- ההורדה ----------
 
@@ -3204,8 +2663,6 @@
   const dlOutOfMemory = e => !!e && (e.name === 'RangeError' || e.tooLarge);
 
   async function runDownload(id, choice) {
-    const method = hasDrive() ? dlMethod() : 'browser';
-    if (method === 'server') return serverDownload(id, choice);
     let busy = null;
     try {
       await browserDownload(id, choice, b => { busy = b; });
@@ -3222,11 +2679,6 @@
       }
       // קישור שפג (403) – בניסיון הבא מבקשים קישורים חדשים
       if (e && e.expired && dlInfo.has(id)) { dlInfo.delete(id); dlInfoReady.delete(id); }
-      // ב-auto: ממשיכים דרך השרת באותו מקום בסשן (לא נספר כהורדה נוספת)
-      if (method === 'auto' && hasDrive()) {
-        if (busy && dlBusy === busy) dlBusy = null;
-        return serverDownload(id, choice, true);
-      }
       // "ההורדה נכשלה" כמו ביוטיוב; הסבר קצר רק כשיוטיוב נתן סיבה (סרטון פרטי וכו'), "האחסון מלא" כשאין זיכרון
       const full = e && (e.name === 'RangeError' || e.tooLarge);
       dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null });
@@ -3235,7 +2687,7 @@
 
   async function browserDownload(id, choice, onBusy) {
     const abort = new AbortController();
-    const busy = dlBusy = { id, choice, abort, kind: 'browser', percent: null, preparing: true, meta: dlMeta(id) };
+    const busy = dlBusy = { id, choice, abort, percent: null, preparing: true, meta: dlMeta(id) };
     if (onBusy) onBusy(busy);
     const aborted = () => new DOMException('aborted', 'AbortError');
     dlUpdateUnload();
@@ -3290,114 +2742,6 @@
       if (abort.signal.aborted) throw aborted();
       throw e;
     }
-  }
-
-  // האיכות בשרת: הגובה הקרוב שהשרת מכיר (DRIVE_QUALITIES: 1080/720/480/360)
-  function dlServerQuality(choice) {
-    if (dlIsAudio(choice)) return { type: 'audio', quality: choice === 'mp3' ? 'mp3' : 'm4a' };
-    const c = DL_CHOICES.find(x => x.value === choice);
-    const height = c ? c.height : (/^\d+$/.test(String(choice)) ? +choice : 720);
-    const q = [1080, 720, 480, 360].find(x => x <= height) || 360;
-    return { type: 'video', quality: String(q) };
-  }
-
-  function listenJobs() {
-    if (dlListening || !hasDrive() || typeof Platform.drive.onJob !== 'function') return;
-    dlListening = true;
-    Platform.drive.onJob(j => { try { onServerJob(j); } catch {} });
-  }
-
-  async function serverDownload(id, choice, fallback) {
-    if (dlBusy) return;
-    if (!hasDrive()) return dlFail(null, id, choice, { text: MSG.failed() });
-    listenJobs();
-    const { type, quality } = dlServerQuality(choice);
-    const busy = dlBusy = { id, choice, kind: 'server', percent: null, preparing: true, meta: dlMeta(id) };
-    dlUpdateUnload();
-    refreshDownloadButtons();
-    dlShowProgress(busy);
-    let r, meta = null;
-    try {
-      let info = null;
-      try { if (dlInfo.has(id)) info = await dlInfo.get(id); } catch {}
-      meta = dlMeta(id, info);
-      busy.meta = meta;
-      r = await Platform.drive.start({ url: 'https://www.youtube.com/watch?v=' + id, videoId: id, type, quality, title: meta.title });
-    } catch (e) {
-      r = { ok: false, error: { code: 'INTERNAL', message: e.message } };
-    }
-    if (dlBusy !== busy) return; // בוטל בינתיים
-    if (r && r.job) {
-      busy.localId = r.job.localId;
-      dlServerJobs.set(r.job.localId, { id, choice, meta });
-      onServerJob(r.job);
-    } else {
-      dlFail(busy, id, choice, dlServerFailToast(r && r.error));
-    }
-  }
-
-  function onServerJob(j) {
-    if (!j || !j.localId) return;
-    const mine = dlServerJobs.get(j.localId);
-    if (!mine) return;
-    const busy = dlBusy && dlBusy.localId === j.localId ? dlBusy : null;
-    if (isActiveJob(j)) {
-      if (busy) {
-        busy.preparing = j.state === 'queued' || j.state === 'checking';
-        busy.percent = j.state === 'downloading' && typeof j.percent === 'number' ? j.percent
-          : ['converting', 'copying', 'uploading', 'shortening'].includes(j.state) ? 99 : busy.percent;
-        refreshDownloadButtons();
-        dlShowProgress(busy);
-      }
-      return;
-    }
-    const code = j.error && j.error.code;
-    // שיתוף עוגיות פעיל בתוסף: ה-service worker מנסה שוב באותה עבודה
-    // ה-service worker מסמן cookieRetryDeclined כשהניסיון לא יוצא לדרך; בנוסף בודקים שוב מעצמנו,
-    // כדי שהכפתור לא יישאר מסתובב אם השידור הלך לאיבוד
-    if (j.state === 'error' && code === 'YT_BOT_CHECK' && S.shareCookies && Platform.drive.canShareCookies
-      && !j.cookieRetry && !j.cookieRetryDeclined && !mine.gaveUp) {
-      if (busy) dlResyncLater(busy, j);
-      return;
-    }
-    dlServerJobs.delete(j.localId);
-    if (j.state === 'done') {
-      dlSetDone(mine.id, true, { ...(mine.meta || {}), title: (mine.meta && mine.meta.title) || j.title || '' });
-      // www: "לצפייה בסרטון" פותח את דף ההורדות כמו ב-Premium; באתרים בלי דף הורדות – הקובץ בדרייב
-      const url = j.drive_url || j.short_url || j.view_url;
-      const action = dlViewAction() || (url ? { label: MSG.view(), run: () => window.open(url, '_blank', 'noopener') } : null);
-      const endToast = { text: MSG.downloaded(), action };
-      if (busy) dlFinish(busy, endToast);
-      else ytToast(endToast);
-      return;
-    }
-    const endToast = dlServerFailToast(j.error);
-    if (busy) dlFail(busy, mine.id, mine.choice, endToast);
-    else { dlFailed.set(mine.id, mine.choice); refreshDownloadButtons(); ytToast(endToast); }
-  }
-
-  // ממתינים לניסיון החוזר עם עוגיות: כל 30 שניות בודקים את רשימת העבודות, ואחרי 5 דקות בלי שינוי מסיימים
-  const DL_RESYNC_MS = 30 * 1000;
-  const DL_RESYNC_MAX = 5 * 60 * 1000;
-  function dlResyncLater(busy, j) {
-    if (busy.resync) return;
-    const started = Date.now();
-    const check = async () => {
-      busy.resync = 0;
-      if (dlBusy !== busy) return;
-      let cur = null;
-      try { cur = (await Platform.drive.jobs()).find(x => x && x.localId === j.localId) || null; } catch {}
-      if (dlBusy !== busy) return;
-      const waiting = !cur || (cur.state === 'error' && !cur.cookieRetry && !cur.cookieRetryDeclined);
-      if (!waiting) return onServerJob(cur);
-      if (Date.now() - started >= DL_RESYNC_MAX) {
-        const mine = dlServerJobs.get(j.localId);
-        if (mine) mine.gaveUp = true;
-        return onServerJob(cur || j);
-      }
-      busy.resync = setTimeout(check, DL_RESYNC_MS);
-    };
-    busy.resync = setTimeout(check, DL_RESYNC_MS);
   }
 
   // דיאלוג "איכות ההורדה" כמו ytd-download-quality-selector-renderer[dialog] (נמדד ב-CSS של יוטיוב, 16/09/2026):
@@ -3756,7 +3100,6 @@
   // ---------- ממשק בתוך יוטיוב: רק במקומות של יוטיוב, בעיצוב של יוטיוב ----------
   // אין כפתור בנגן, אין כפתור צף ואין חלונית משלנו. מה שנשאר כאן:
   // - host עם shadow סגור לטוסט (yt-notification-action-renderer) ולדיאלוגים, בצבעים של יוטיוב (בהיר/כהה לפי ytDark()).
-  // - confirmDialog – דיאלוג אישור בעיצוב של יוטיוב.
   // - טמפרמונקי בלבד: דיאלוג הגדרות + פריט "הגדרות יוטיוב פרימיום" בתפריט ⚙ של הנגן ובתפריט האווטאר/⋮ של יוטיוב.
   //   בתוסף ההגדרות נמצאות רק בחלון התוסף.
 
@@ -3857,7 +3200,6 @@
   .group { margin: 16px 0 4px; font: 500 16px/22px Roboto, Arial, sans-serif; }
   .group:first-child { margin-top: 4px; }
   .opt { display: flex; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--yt-line); cursor: pointer; }
-  .opt.col { flex-direction: column; align-items: stretch; gap: 8px; cursor: default; }
   .opt .txt { flex: 1; min-width: 0; }
   .opt small { display: block; color: var(--yt-text2); font-size: 12px; line-height: 18px; margin-top: 2px; }
   .sw { appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 36px; height: 14px; margin: 3px 3px; border-radius: 7px;
@@ -3866,15 +3208,9 @@
     box-shadow: 0 1px 5px rgba(0,0,0,.6); transition: inset-inline-start .15s, background .15s; }
   .sw:checked { background: var(--yt-track-on); }
   .sw:checked::after { inset-inline-start: 19px; background: var(--yt-blue); }
-  select, input.text { font: 400 14px/20px Roboto, Arial, sans-serif; color: var(--yt-text); background: var(--yt-chip); border: 0; border-bottom: 1px solid var(--yt-line); border-radius: 8px 8px 0 0; padding: 8px 10px; }
+  select { font: 400 14px/20px Roboto, Arial, sans-serif; color: var(--yt-text); background: var(--yt-chip); border: 0; border-bottom: 1px solid var(--yt-line); border-radius: 8px 8px 0 0; padding: 8px 10px; }
   select { flex: none; max-width: 180px; cursor: pointer; }
   select option { background: var(--yt-raised); color: var(--yt-text); }
-  input.text { width: 100%; direction: ltr; text-align: left; }
-  input.text:focus { outline: none; border-bottom: 2px solid var(--yt-blue); }
-  .test { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--yt-line); }
-  .test span { flex: 1; color: var(--yt-text2); font-size: 12px; line-height: 18px; }
-  .test span.ok { color: var(--yt-ok); }
-  .test span.err { color: var(--yt-err); }
   .credit { padding: 12px 24px 0; color: var(--yt-text2); font-size: 12px; line-height: 18px; text-align: center; }
   .credit a { color: var(--yt-blue); text-decoration: none; font-weight: 500; }
   .credit a:hover { text-decoration: underline; }
@@ -4023,32 +3359,10 @@
     return { back, close };
   }
 
-  // דיאלוג אישור. text: מחרוזת או מערך פסקאות
-  function confirmDialog({ title, text, ok, cancel } = {}) {
-    return new Promise(resolve => {
-      const cancelBtn = h('button', { class: 'btn', onclick: () => dlg.close(false) }, cancel || uiText('ביטול', 'Cancel'));
-      const okBtn = h('button', { class: 'btn filled', onclick: () => dlg.close(true) }, ok || uiText('אישור', 'OK'));
-      const dlg = ytDialog({
-        title,
-        body: [].concat(text || []).map(t => h('p', null, t)),
-        actions: [cancelBtn, okBtn],
-        onClose: v => resolve(!!v),
-      });
-      cancelBtn.focus();
-    });
-  }
-
   // ---------- הגדרות (טמפרמונקי בלבד) ----------
 
   const settingLabel = s => uiText(s.label, s.labelEn);
   const settingDesc = s => uiText(s.desc || '', s.descEn);
-
-  function settingHidden(s) {
-    if (s.extensionOnly && Platform.kind !== 'extension') return true;
-    // בתוסף המפתח, כתובת השרת והעוגיות נערכים רק בחלון התוסף – הדף לא יכול לשנות אותם
-    if ((s.secret || s.popupOnly) && Platform.kind === 'extension') return true;
-    return false;
-  }
 
   function settingRow(s) {
     const desc = settingDesc(s);
@@ -4057,59 +3371,17 @@
       const opts = (s.options || []).map(o => h('option', { value: o.value, selected: String(S[s.key]) === String(o.value) }, uiText(o.label, o.labelEn)));
       return h('label', { class: 'opt' }, text, h('select', { onchange: e => update({ [s.key]: e.target.value }) }, opts));
     }
-    if (s.type === 'text') {
-      const input = h('input', {
-        class: 'text', type: s.secret ? 'password' : 'text', value: S[s.key] == null ? '' : String(S[s.key]),
-        spellcheck: false, autocomplete: 'off',
-        onchange: e => update({ [s.key]: e.target.value.trim() || s.def }),
-      });
-      input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
-      return h('label', { class: 'opt col' }, text, input);
-    }
     const box = h('input', { class: 'sw', type: 'checkbox', role: 'switch', checked: !!S[s.key] });
-    box.addEventListener('change', async () => {
-      const want = box.checked;
-      if (want && s.confirm === 'cookies') {
-        // בטמפרמונקי ההגדרה מוסתרת (extensionOnly); זה רק ליתר ביטחון
-        box.checked = false;
-        if (!await confirmDialog(COOKIE_WARNING)) return;
-        box.checked = true;
-      }
-      update({ [s.key]: want });
-    });
+    box.addEventListener('change', () => update({ [s.key]: box.checked }));
     return h('label', { class: 'opt' }, text, box);
-  }
-
-  function serverTestRow() {
-    const out = h('span', null, uiText('בדיקה שהשרת זמין', 'Check that the server is reachable'));
-    const btn = h('button', { class: 'btn tonal' }, uiText('בדיקת חיבור', 'Test connection'));
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      out.className = '';
-      out.textContent = uiText('בודק…', 'Checking…');
-      const r = await Platform.drive.health().catch(e => ({ ok: false, error: { message: String(e && e.message || e) } }));
-      btn.disabled = false;
-      if (!out.isConnected) return;
-      if (r && r.ok) {
-        out.className = 'ok';
-        out.textContent = uiText('מחובר', 'Connected');
-      } else {
-        const err = (r && r.error) || {};
-        const hint = typeof DRIVE_ERROR_HINT !== 'undefined' && DRIVE_ERROR_HINT[err.code];
-        out.className = 'err';
-        out.textContent = (err.message || uiText('אין חיבור לשרת', 'No connection to the server')) + (hint ? ' ' + hint : '');
-      }
-    });
-    return h('div', { class: 'test' }, out, btn);
   }
 
   function renderSettings(container) {
     const kids = [];
     for (const g of SETTING_GROUPS) {
-      const items = SETTINGS.filter(s => s.group === g.id && !settingHidden(s));
+      const items = SETTINGS.filter(s => s.group === g.id);
       if (!items.length) continue;
       kids.push(h('div', { class: 'group' }, uiText(g.label, g.labelEn)), ...items.map(settingRow));
-      if (g.id === 'drive' && Platform.drive && typeof Platform.drive.health === 'function') kids.push(serverTestRow());
     }
     container.append(...kids);
     return container;
@@ -4138,7 +3410,7 @@
     if (!settingsDlg || !settingsDlg.back.isConnected) return;
     const box = settingsDlg.back.querySelector('.settings');
     const active = shadow && shadow.activeElement;
-    if (!box || (active && box.contains(active) && active.matches('input.text, select'))) return;
+    if (!box || (active && box.contains(active) && active.matches('select'))) return;
     box.replaceChildren();
     renderSettings(box);
     box.append(creditLine());
@@ -4338,12 +3610,8 @@
   function update(patch) {
     Object.assign(S, patch);
     const saved = {};
-    for (const s of SETTINGS) {
-      // בתוסף הסוד, כתובת השרת וההסכמה לעוגיות נקבעים בחלון התוסף; הגשר שומר את הערכים הקיימים
-      if ((s.secret || s.popupOnly) && Platform.kind === 'extension') continue;
-      saved[s.key] = S[s.key];
-    }
-    Platform.save(storableSettings(saved));
+    for (const s of SETTINGS) saved[s.key] = S[s.key];
+    Platform.save(saved);
     applySettings();
   }
 

@@ -1,7 +1,6 @@
 // ---------- ממשק בתוך יוטיוב: רק במקומות של יוטיוב, בעיצוב של יוטיוב ----------
 // אין כפתור בנגן, אין כפתור צף ואין חלונית משלנו. מה שנשאר כאן:
 // - host עם shadow סגור לטוסט (yt-notification-action-renderer) ולדיאלוגים, בצבעים של יוטיוב (בהיר/כהה לפי ytDark()).
-// - confirmDialog – דיאלוג אישור בעיצוב של יוטיוב.
 // - טמפרמונקי בלבד: דיאלוג הגדרות + פריט "הגדרות יוטיוב פרימיום" בתפריט ⚙ של הנגן ובתפריט האווטאר/⋮ של יוטיוב.
 //   בתוסף ההגדרות נמצאות רק בחלון התוסף.
 
@@ -102,7 +101,6 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .group { margin: 16px 0 4px; font: 500 16px/22px Roboto, Arial, sans-serif; }
 .group:first-child { margin-top: 4px; }
 .opt { display: flex; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--yt-line); cursor: pointer; }
-.opt.col { flex-direction: column; align-items: stretch; gap: 8px; cursor: default; }
 .opt .txt { flex: 1; min-width: 0; }
 .opt small { display: block; color: var(--yt-text2); font-size: 12px; line-height: 18px; margin-top: 2px; }
 .sw { appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 36px; height: 14px; margin: 3px 3px; border-radius: 7px;
@@ -111,15 +109,9 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
   box-shadow: 0 1px 5px rgba(0,0,0,.6); transition: inset-inline-start .15s, background .15s; }
 .sw:checked { background: var(--yt-track-on); }
 .sw:checked::after { inset-inline-start: 19px; background: var(--yt-blue); }
-select, input.text { font: 400 14px/20px Roboto, Arial, sans-serif; color: var(--yt-text); background: var(--yt-chip); border: 0; border-bottom: 1px solid var(--yt-line); border-radius: 8px 8px 0 0; padding: 8px 10px; }
+select { font: 400 14px/20px Roboto, Arial, sans-serif; color: var(--yt-text); background: var(--yt-chip); border: 0; border-bottom: 1px solid var(--yt-line); border-radius: 8px 8px 0 0; padding: 8px 10px; }
 select { flex: none; max-width: 180px; cursor: pointer; }
 select option { background: var(--yt-raised); color: var(--yt-text); }
-input.text { width: 100%; direction: ltr; text-align: left; }
-input.text:focus { outline: none; border-bottom: 2px solid var(--yt-blue); }
-.test { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--yt-line); }
-.test span { flex: 1; color: var(--yt-text2); font-size: 12px; line-height: 18px; }
-.test span.ok { color: var(--yt-ok); }
-.test span.err { color: var(--yt-err); }
 .credit { padding: 12px 24px 0; color: var(--yt-text2); font-size: 12px; line-height: 18px; text-align: center; }
 .credit a { color: var(--yt-blue); text-decoration: none; font-weight: 500; }
 .credit a:hover { text-decoration: underline; }
@@ -268,32 +260,10 @@ function ytDialog({ title, body, actions, onClose, label, className, dir: forceD
   return { back, close };
 }
 
-// דיאלוג אישור. text: מחרוזת או מערך פסקאות
-function confirmDialog({ title, text, ok, cancel } = {}) {
-  return new Promise(resolve => {
-    const cancelBtn = h('button', { class: 'btn', onclick: () => dlg.close(false) }, cancel || uiText('ביטול', 'Cancel'));
-    const okBtn = h('button', { class: 'btn filled', onclick: () => dlg.close(true) }, ok || uiText('אישור', 'OK'));
-    const dlg = ytDialog({
-      title,
-      body: [].concat(text || []).map(t => h('p', null, t)),
-      actions: [cancelBtn, okBtn],
-      onClose: v => resolve(!!v),
-    });
-    cancelBtn.focus();
-  });
-}
-
 // ---------- הגדרות (טמפרמונקי בלבד) ----------
 
 const settingLabel = s => uiText(s.label, s.labelEn);
 const settingDesc = s => uiText(s.desc || '', s.descEn);
-
-function settingHidden(s) {
-  if (s.extensionOnly && Platform.kind !== 'extension') return true;
-  // בתוסף המפתח, כתובת השרת והעוגיות נערכים רק בחלון התוסף – הדף לא יכול לשנות אותם
-  if ((s.secret || s.popupOnly) && Platform.kind === 'extension') return true;
-  return false;
-}
 
 function settingRow(s) {
   const desc = settingDesc(s);
@@ -302,59 +272,17 @@ function settingRow(s) {
     const opts = (s.options || []).map(o => h('option', { value: o.value, selected: String(S[s.key]) === String(o.value) }, uiText(o.label, o.labelEn)));
     return h('label', { class: 'opt' }, text, h('select', { onchange: e => update({ [s.key]: e.target.value }) }, opts));
   }
-  if (s.type === 'text') {
-    const input = h('input', {
-      class: 'text', type: s.secret ? 'password' : 'text', value: S[s.key] == null ? '' : String(S[s.key]),
-      spellcheck: false, autocomplete: 'off',
-      onchange: e => update({ [s.key]: e.target.value.trim() || s.def }),
-    });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
-    return h('label', { class: 'opt col' }, text, input);
-  }
   const box = h('input', { class: 'sw', type: 'checkbox', role: 'switch', checked: !!S[s.key] });
-  box.addEventListener('change', async () => {
-    const want = box.checked;
-    if (want && s.confirm === 'cookies') {
-      // בטמפרמונקי ההגדרה מוסתרת (extensionOnly); זה רק ליתר ביטחון
-      box.checked = false;
-      if (!await confirmDialog(COOKIE_WARNING)) return;
-      box.checked = true;
-    }
-    update({ [s.key]: want });
-  });
+  box.addEventListener('change', () => update({ [s.key]: box.checked }));
   return h('label', { class: 'opt' }, text, box);
-}
-
-function serverTestRow() {
-  const out = h('span', null, uiText('בדיקה שהשרת זמין', 'Check that the server is reachable'));
-  const btn = h('button', { class: 'btn tonal' }, uiText('בדיקת חיבור', 'Test connection'));
-  btn.addEventListener('click', async () => {
-    btn.disabled = true;
-    out.className = '';
-    out.textContent = uiText('בודק…', 'Checking…');
-    const r = await Platform.drive.health().catch(e => ({ ok: false, error: { message: String(e && e.message || e) } }));
-    btn.disabled = false;
-    if (!out.isConnected) return;
-    if (r && r.ok) {
-      out.className = 'ok';
-      out.textContent = uiText('מחובר', 'Connected');
-    } else {
-      const err = (r && r.error) || {};
-      const hint = typeof DRIVE_ERROR_HINT !== 'undefined' && DRIVE_ERROR_HINT[err.code];
-      out.className = 'err';
-      out.textContent = (err.message || uiText('אין חיבור לשרת', 'No connection to the server')) + (hint ? ' ' + hint : '');
-    }
-  });
-  return h('div', { class: 'test' }, out, btn);
 }
 
 function renderSettings(container) {
   const kids = [];
   for (const g of SETTING_GROUPS) {
-    const items = SETTINGS.filter(s => s.group === g.id && !settingHidden(s));
+    const items = SETTINGS.filter(s => s.group === g.id);
     if (!items.length) continue;
     kids.push(h('div', { class: 'group' }, uiText(g.label, g.labelEn)), ...items.map(settingRow));
-    if (g.id === 'drive' && Platform.drive && typeof Platform.drive.health === 'function') kids.push(serverTestRow());
   }
   container.append(...kids);
   return container;
@@ -383,7 +311,7 @@ function refreshSettingsDialog() {
   if (!settingsDlg || !settingsDlg.back.isConnected) return;
   const box = settingsDlg.back.querySelector('.settings');
   const active = shadow && shadow.activeElement;
-  if (!box || (active && box.contains(active) && active.matches('input.text, select'))) return;
+  if (!box || (active && box.contains(active) && active.matches('select'))) return;
   box.replaceChildren();
   renderSettings(box);
   box.append(creditLine());

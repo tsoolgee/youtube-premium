@@ -4,7 +4,7 @@ python test/real/probe.py <scenario> [--video ID] [--dark] [--lang en] [--headed
 תרחישים: www-download (הורדת 1080p אמיתית של סרטון קצר + ffprobe, יישור שורת הפעולות, שגיאות 403),
 www-menu (פריט ההורדה בתפריט ⋮ לפני/אחרי, הסרה מהתפריט עם "ביטול"), downloads-page,
 mobile (m.youtube ב-360px, סרגל מצומצם → "עוד" → "הורדה"), music (music.youtube.com),
-popup (חלון התוסף ב-380px עם עבודות מדומות).
+popup (חלון התוסף ב-380px).
 פלט: test/real/out/probe-<scenario>-*.png ו-probe-<scenario>.json.
 """
 import argparse
@@ -85,16 +85,13 @@ ROW_JS = """() => {
 }"""
 
 
-async def no_server(ctx):
-    """אסור להתחיל עבודות אמיתיות בשרת ה-Drive: הורדה בדפדפן בלבד, כתובת שרת מתה, וחסימת הממסר."""
-    await ctx.route("**/script.google.com/**", lambda r: r.abort())
-    await ctx.route("**/script.googleusercontent.com/**", lambda r: r.abort())
-    sw = next((w for w in ctx.service_workers if w.url.startswith("chrome-extension://") and w.url.endswith("/background.js")), None)
-    while not sw:
-        w = await ctx.wait_for_event("serviceworker", timeout=30000)
-        sw = w if w.url.startswith("chrome-extension://") and w.url.endswith("/background.js") else None
-    await sw.evaluate("() => new Promise(r => chrome.storage.local.set({ settings: { downloadMethod: 'browser', serverUrl: 'http://127.0.0.1:9' } }, r))")
-    step("no-server", settings=await sw.evaluate("() => new Promise(r => chrome.storage.local.get('settings', x => r(x.settings)))"))
+async def extension_id(ctx):
+    """מזהה התוסף מדף התוספים (אין service worker שאפשר לקרוא ממנו את הכתובת)."""
+    page = await ctx.new_page()
+    await page.goto("edge://extensions/", wait_until="domcontentloaded")
+    info = await page.evaluate("() => new Promise(r => chrome.developerPrivate.getExtensionsInfo(l => r(l.map(e => [e.id, e.name]))))")
+    await page.close()
+    return next(i for i, n in info if n == "יוטיוב פרימיום")
 
 
 async def launch(p, mobile=False):
@@ -113,8 +110,6 @@ async def launch(p, mobile=False):
         opts.update(viewport={"width": 1400, "height": 950})
     ctx = await p.chromium.launch_persistent_context(tempfile.mkdtemp(), **opts)
     await ctx.add_init_script("(() => { const a = Element.prototype.attachShadow; Element.prototype.attachShadow = function (o) { return a.call(this, { ...o, mode: 'open' }); }; })()")
-    if not A.no_ext:
-        await no_server(ctx)
     # מי קורא ל-fetch של videoplayback בלי range (לאתר את מקור שגיאות 403)
     await ctx.add_init_script("""(() => { const f = window.fetch; window.__vpStacks = [];
       window.fetch = function (i, o) { try { const u = String(i && i.url || i); if (/videoplayback/.test(u) && !/[&]range=/.test(u) && window.__vpStacks.length < 5) window.__vpStacks.push(u.slice(0, 120) + ' | ' + new Error().stack); } catch {} return f.apply(this, arguments); }; })()""")
@@ -342,34 +337,16 @@ async def music(page):
 
 
 async def popup(page):
-    """חלון התוסף ב-380px עם עבודות מדומות באחסון (בלי שרת): יורד 40%, מוכן, שגיאה – מודדים שהשורות לא נמעכות."""
-    ctx = page.context
-    sw = next(w for w in ctx.service_workers if w.url.endswith("/background.js"))
-    ext_id = sw.url.split("/")[2]
-    now = 1789000000000
-    jobs = [
-        {"localId": "a", "jobId": "fake-a", "url": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "videoId": "jNQXAC9IVRw", "type": "video", "quality": "720", "title": "Me at the zoo – כותרת ארוכה מאוד כדי לבדוק קיצור עם שלוש נקודות", "state": "downloading", "percent": 40, "created": now},
-        {"localId": "b", "jobId": "fake-b", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "videoId": "dQw4w9WgXcQ", "type": "audio", "quality": "mp3", "title": "Rick Astley - Never Gonna Give You Up", "state": "done", "size": 3400000, "short_url": "https://did.li/abc123", "drive_url": "https://drive.google.com/file/d/x/view", "created": now - 1},
-        {"localId": "c", "jobId": "fake-c", "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ", "videoId": "aqz-KE-bpKQ", "type": "video", "quality": "1080", "title": "Big Buck Bunny", "state": "error", "error": {"code": "YT_BOT_CHECK", "message": "YouTube asked to confirm you are not a bot"}, "created": now - 2},
-    ]
-    # מצב "יורד" נשמר כמו שהוא: השרת מת (127.0.0.1:9) ו-script.google.com חסום, כך שה-polling לא מגיע לשום מקום
-    await sw.evaluate("j => new Promise(r => chrome.storage.local.set({ driveJobs: j }, r))", jobs)
+    """חלון התוסף ב-380px: כפתור ההורדה וההגדרות – מודדים שאין גלישה אופקית."""
+    ext_id = await extension_id(page.context)
     # 400: גוף החלון 380px + פס גלילה אנכי (כמו שכרום מרחיב את החלון), כדי שלא ייראה פס גלילה אופקי מדומה
     await page.set_viewport_size({"width": 400, "height": 900})
     await page.goto(f"chrome-extension://{ext_id}/popup.html", wait_until="domcontentloaded")
-    await asyncio.sleep(6)
-    step("thumbs", loaded=await page.evaluate(r"""() => Promise.all([...document.querySelectorAll('.job-thumb')].map(t => new Promise(r => {
-      const u = (t.style.backgroundImage.match(/url\("(.+)"\)/) || [])[1]; if (!u) return r('none');
-      const i = new Image(); i.onload = () => r(i.naturalWidth); i.onerror = () => r('error ' + u); i.src = u; })))"""))
-    rows = await page.evaluate("""() => [...document.querySelectorAll('ul.jobs li')].map(li => {
-      const w = s => { const e = li.querySelector(s); if (!e) return null; const r = e.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; };
-      const lr = li.getBoundingClientRect();
-      const over = [...li.querySelectorAll('*')].some(e => { const r = e.getBoundingClientRect(); return r.bottom > lr.bottom + 0.5 || r.right > lr.right + 0.5 || r.left < lr.left - 0.5; });
-      return { li: [Math.round(lr.width), Math.round(lr.height)], thumb: w('.job-thumb'), title: w('.job-title'), meta: w('.job-meta'), bar: w('.bar'), link: w('.job-link'), err: w('.job-err'), overflow: over, text: li.textContent.slice(0, 80) }; })""")
-    step("rows", dir=await page.evaluate("() => document.documentElement.dir"), rows=rows,
+    await asyncio.sleep(2)
+    step("popup", dir=await page.evaluate("() => document.documentElement.dir"),
+         rows=await page.evaluate("() => document.querySelectorAll('#settings label.opt').length"),
          scrollX=await page.evaluate("() => document.documentElement.scrollWidth - innerWidth"))
-    await page.evaluate("() => document.querySelector('#jobs').scrollIntoView()")
-    await shot(page, f"1-jobs-{A.lang}")
+    await shot(page, f"1-popup-{A.lang}")
 
 
 async def eval_js(page):

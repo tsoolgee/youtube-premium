@@ -149,16 +149,6 @@ function saveFile(parts, name, type) {
   setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
 }
 
-// ---------- שרת ה-Drive: קבועים מ-drive-client.js, עם גיבוי אם הקובץ חסר ----------
-
-const DL_FALLBACK_ACTIVE = ['queued', 'checking', 'downloading', 'converting', 'copying', 'uploading', 'shortening'];
-
-const dActive = () => (typeof DRIVE_ACTIVE_STATES !== 'undefined' && DRIVE_ACTIVE_STATES) || DL_FALLBACK_ACTIVE;
-const dHint = code => ((typeof DRIVE_ERROR_HINT !== 'undefined' && DRIVE_ERROR_HINT) || {})[code] || '';
-const hasDrive = () => typeof Platform !== 'undefined' && !!Platform.drive && typeof Platform.drive.start === 'function';
-const isActiveJob = j => dActive().includes(j.state);
-const dlMethod = () => (['auto', 'browser', 'server'].includes(S.downloadMethod) ? S.downloadMethod : 'auto');
-
 function pageTitle(id) {
   if (id && id !== videoId()) return '';
   try { const t = player()?.getVideoData?.()?.title; if (t) return t; } catch {}
@@ -173,7 +163,7 @@ function pageTitle(id) {
 // כמה הורדות: תור (כמו manualSessionTotalDownloads של יוטיוב) – "ההורדה מתבצעת... 2/1".
 // כישלון: הכפתור עובר ל"ניסיון חוזר" (TRANSFER_STATE_FAILED / ACTION_RETRY).
 // www: דף "הורדות" (/feed/downloads, FEdownloads) – יוטיוב מצייר אותו בעצמו; אנחנו רק ממלאים את הרשימה.
-// השרת (Drive) עובד מאחורי הקלעים לפי downloadMethod: ב-auto – דפדפן, ובכישלון שרת בלי לשאול.
+// ההורדה כולה בדפדפן (VISIONOS → fetch בטווחים → Mux / MP3), בלי שום שרת חיצוני.
 
 // סולם האיכויות של Premium בדסקטופ (השמות מגיעים מהשרת; "שמע בלבד" נשאר אחרון – יש אותו רק אצלנו)
 const DL_CHOICES = [
@@ -251,15 +241,13 @@ const MSG = {
   delete: () => ytMsg('DELETE', 'מחיקה', 'Delete'),
 };
 
-let dlBusy = null;      // הורדה שרצה עכשיו: { id, abort?, kind: 'browser'|'server', localId?, percent, preparing }
+let dlBusy = null;      // הורדה שרצה עכשיו: { id, choice, abort, percent, preparing, converting? }
 const dlQueue = [];     // הורדות שמחכות: [{ id, choice }]
 const dlSession = { total: 0, done: 0 }; // כמו manualSessionTotalDownloads / manualSessionDownloaded
 let dlToast = null, dlToastClosed = false, dlToastHold = 0;
 const dlFailed = new Map();     // id → הבחירה האחרונה (הכפתור מציג "ניסיון חוזר")
 let dlDialog = null;    // { id, close, back }
-let dlListening = false;
 const dlInfo = new Map();       // id → Promise<info> (רשימת הפורמטים, לגדלים בדיאלוג ולהורדה)
-const dlServerJobs = new Map(); // localId → { id, choice, meta }
 
 const isDownloadBusy = () => !!dlBusy || dlQueue.length > 0;
 const dlIsQueued = id => dlQueue.some(q => q.id === id);
@@ -371,7 +359,7 @@ function dlShowProgress(busy) {
   const opts = {
     // כמו ytd-video-download-toast-renderer: רק "יורד..." או היחס, ו-KEEP_OPEN (ההכנה נראית רק בטבעת שבכפתור)
     text: total > 1 ? MSG.ratio(Math.min(total, dlSession.done + 1), total) : MSG.downloading() + '...',
-    sub: busy.kind === 'browser' ? MSG.keepOpen() : null,
+    sub: MSG.keepOpen(),
     action: dlViewAction(),
     close: true,
     onClose: () => { dlToastClosed = true; },
@@ -384,9 +372,9 @@ function dlShowProgress(busy) {
   dlToast = ytToast(opts);
 }
 
-// ---------- יציאה מהדף באמצע הורדה בדפדפן / כשיש תור (כמו boundBeforeUnload של יוטיוב) ----------
+// ---------- יציאה מהדף באמצע הורדה / כשיש תור (כמו boundBeforeUnload של יוטיוב) ----------
 
-const dlWantsUnloadGuard = () => !!((dlBusy && dlBusy.kind === 'browser') || dlQueue.length);
+const dlWantsUnloadGuard = () => !!(dlBusy || dlQueue.length);
 function dlBeforeUnload(e) {
   if (!dlWantsUnloadGuard()) return;
   e.preventDefault();
@@ -794,7 +782,7 @@ function dlRemoveNow(id) {
   let undo;
   if (busy) {
     const choice = busy.choice;
-    if (busy.kind === 'browser') dlCancel(busy); else dlForgetServer(busy);
+    dlCancel(busy);
     undo = () => startDownload(id, choice);
   } else if (queued) {
     dlUnqueue(id);
@@ -838,8 +826,7 @@ function openRemoveDialog(id) {
     dlButton(okLabel, 'dq-ok', () => {
       dlg.close(true);
       const busy = dlBusy && dlBusy.id === id ? dlBusy : null;
-      if (busy && busy.kind === 'browser') dlCancel(busy);
-      else if (busy) dlForgetServer(busy);
+      if (busy) dlCancel(busy);
       else if (dlIsQueued(id)) dlUnqueue(id);
       else dlSetDone(id, false);
     }),
@@ -855,7 +842,6 @@ function openRemoveDialog(id) {
 function openQualityDialog(id, again) {
   if (isDownloadViewOpen(id) && !again) return;
   closeDownloadDialog();
-  const method = hasDrive() ? dlMethod() : 'browser';
   let chosen = null;
   const asides = new Map();
   let dlg;
@@ -895,27 +881,19 @@ function openQualityDialog(id, again) {
   dlDialog = { id, close: dlg.close, back: dlg.back };
   cancelBtn.focus();
 
-  // גדלים לפי מה שיוטיוב מחזיר (לא בשיטת "רק שרת")
-  if (method !== 'server') {
-    dlGetInfo(id).then(info => {
-      if (!dlg.back.isConnected) return;
-      // עכשיו יודעים מה יוטיוב מציע לסרטון הזה – מציגים את כל האיכויות
-      asides.clear();
-      fill(list, ...makeRows(dlChoices(info)));
-      for (const [value, aside] of asides) aside.textContent = dlSizeText(info, value);
-    }).catch(() => {});
-  }
+  // גדלים לפי מה שיוטיוב מחזיר
+  dlGetInfo(id).then(info => {
+    if (!dlg.back.isConnected) return;
+    // עכשיו יודעים מה יוטיוב מציע לסרטון הזה – מציגים את כל האיכויות
+    asides.clear();
+    fill(list, ...makeRows(dlChoices(info)));
+    for (const [value, aside] of asides) aside.textContent = dlSizeText(info, value);
+  }).catch(() => {});
 }
 
 function dlCancel(busy) {
   if (!busy || dlBusy !== busy) return;
   if (busy.abort) busy.abort.abort();
-  dlFinish(busy, null, true);
-}
-
-function dlForgetServer(busy) {
-  if (!busy || dlBusy !== busy) return;
-  if (busy.localId) dlServerJobs.delete(busy.localId);
   dlFinish(busy, null, true);
 }
 
@@ -939,10 +917,7 @@ function dlPump() {
 // סוף הורדה אחת (הצלחה / כישלון / ביטול): משחררים, מעדכנים את הכפתור ואת הטוסט וממשיכים בתור.
 // endToast: הטוסט שמוצג בסוף (אם התור ריק; שגיאה מוצגת גם באמצע תור). cancelled: לא נספר כהורדה
 function dlFinish(busy, endToast, cancelled) {
-  if (busy) {
-    if (dlBusy === busy) dlBusy = null;
-    clearTimeout(busy.resync);
-  }
+  if (busy && dlBusy === busy) dlBusy = null;
   if (cancelled) dlSession.total = Math.max(0, dlSession.total - 1);
   else dlSession.done++;
   const more = dlQueue.length > 0;
@@ -970,51 +945,7 @@ function dlFail(busy, id, choice, endToast) {
 
 const DL_ERRORS = {
   BLOCKED_418: ['הבקשה נחסמה (ייתכן שהסינון חוסם את הסרטון)', 'The request was blocked (a content filter may be blocking this video)'],
-  NETFREE_BLOCKED: ['הסרטון חסום בסינון. אפשר לבקש פתיחה ולנסות שוב אחרי האישור.', 'The video is blocked by the content filter. You can request access and try again.'],
-  NETFREE_PENDING: ['הסינון עוד לא בדק את הסרטון. נסו שוב בעוד כמה דקות.', "The content filter hasn't checked this video yet. Try again in a few minutes."],
-  NETFREE_STREAM_BLOCKED: ['קובץ הווידאו נחסם בסינון. אפשר להוריד שמע בלבד.', 'The video file is blocked by the content filter. You can download audio only.'],
-  VIDEO_FILE_BLOCKED: ['קובץ הווידאו נחסם בסינון. אפשר להוריד שמע בלבד.', 'The video file is blocked by the content filter. You can download audio only.'],
-  YT_PRIVATE: ['הסרטון פרטי.', 'This video is private.'],
-  YT_UNAVAILABLE: ['הסרטון לא זמין.', 'This video is unavailable.'],
-  YT_AGE_RESTRICTED: ['הסרטון מוגבל לפי גיל.', 'This video is age-restricted.'],
-  LIVE_NOT_SUPPORTED: ['אי אפשר להוריד שידור חי.', "Live streams can't be downloaded."],
-  TOO_LONG: ['הסרטון ארוך מדי לשרת ההורדה.', 'This video is too long for the download server.'],
-  DRIVE_FULL: ['האחסון בדרייב מלא.', 'Google Drive storage is full.'],
-  QUEUE_FULL: ['שרת ההורדה עמוס. נסו שוב בעוד כמה דקות.', 'The download server is busy. Try again in a few minutes.'],
-  RATE_LIMIT: ['יותר מדי הורדות. נסו שוב בעוד שעה.', 'Too many downloads. Try again in an hour.'],
-  UNAUTHORIZED: ['מפתח ה-API של שרת ההורדה שגוי.', 'The download server API key is wrong.'],
-  SERVER_OFFLINE: ['שרת ההורדה לא זמין כרגע. נסו שוב מאוחר יותר.', 'The download server is offline. Try again later.'],
-  CLIENT_BLOCKED: ['כתובת שרת ההורדה חסומה בסינון.', 'The download server address is blocked by the content filter.'],
-  NETWORK: ['אין חיבור לשרת ההורדה. נסו שוב.', "Couldn't reach the download server. Try again."],
-  TIMEOUT: ['התוסף לא ענה בזמן. נסו שוב.', "The extension didn't respond in time. Try again."],
-  JOB_NOT_FOUND: ['שרת ההורדה הופעל מחדש. התחילו את ההורדה שוב.', 'The download server restarted. Start the download again.'],
-  BAD_RESPONSE: ['תשובה לא צפויה משרת ההורדה. נסו שוב בעוד רגע.', 'Unexpected response from the download server. Try again in a moment.'],
-  DOWNLOAD_FAILED: ['ההורדה בשרת נכשלה.', 'The download failed on the server.'],
-  EXTENSION_ERROR: ['אין חיבור לתוסף. רעננו את הדף ונסו שוב.', "Can't reach the extension. Reload the page and try again."],
-  UNSUPPORTED: ['לא זמין בגרסה הזו.', 'Not available in this version.'],
 };
-
-// טוסט כישלון של השרת: "ההורדה נכשלה" ("האחסון מלא" כשהדרייב מלא), והסבר קצר לפי קוד כשיש
-function dlServerFailToast(err) {
-  const code = err && err.code;
-  if (code === 'DRIVE_FULL') return { text: MSG.storageFull() };
-  let sub = DL_ERRORS[code] ? dlErrorDetail(err) : '';
-  if (code === 'YT_BOT_CHECK') {
-    sub = Platform.drive.canShareCookies && !S.shareCookies
-      ? dlT('יוטיוב חסם זמנית את שרת ההורדה. אפשר להפעיל "שיתוף עוגיות" בחלון התוסף.', 'YouTube temporarily blocked the download server. You can turn on "Share cookies" in the extension popup.')
-      : dlT('יוטיוב חסם זמנית את שרת ההורדה. נסו שוב בעוד כחצי שעה.', 'YouTube temporarily blocked the download server. Try again in about half an hour.');
-  }
-  return { text: MSG.failed(), sub: sub || null };
-}
-
-// הסבר לפי קוד; בעברית אפשר גם את ההודעה מהשרת
-function dlErrorDetail(err) {
-  err = err || {};
-  const known = DL_ERRORS[err.code];
-  if (known) return dlT(known[0], known[1]);
-  if (typeof uiHebrew === 'function' && !uiHebrew()) return '';
-  return [err.message, dHint(err.code)].filter(Boolean).join(' ');
-}
 
 // ---------- ההורדה ----------
 
@@ -1048,8 +979,6 @@ function dlLowerChoice(id, choice) {
 const dlOutOfMemory = e => !!e && (e.name === 'RangeError' || e.tooLarge);
 
 async function runDownload(id, choice) {
-  const method = hasDrive() ? dlMethod() : 'browser';
-  if (method === 'server') return serverDownload(id, choice);
   let busy = null;
   try {
     await browserDownload(id, choice, b => { busy = b; });
@@ -1066,11 +995,6 @@ async function runDownload(id, choice) {
     }
     // קישור שפג (403) – בניסיון הבא מבקשים קישורים חדשים
     if (e && e.expired && dlInfo.has(id)) { dlInfo.delete(id); dlInfoReady.delete(id); }
-    // ב-auto: ממשיכים דרך השרת באותו מקום בסשן (לא נספר כהורדה נוספת)
-    if (method === 'auto' && hasDrive()) {
-      if (busy && dlBusy === busy) dlBusy = null;
-      return serverDownload(id, choice, true);
-    }
     // "ההורדה נכשלה" כמו ביוטיוב; הסבר קצר רק כשיוטיוב נתן סיבה (סרטון פרטי וכו'), "האחסון מלא" כשאין זיכרון
     const full = e && (e.name === 'RangeError' || e.tooLarge);
     dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null });
@@ -1079,7 +1003,7 @@ async function runDownload(id, choice) {
 
 async function browserDownload(id, choice, onBusy) {
   const abort = new AbortController();
-  const busy = dlBusy = { id, choice, abort, kind: 'browser', percent: null, preparing: true, meta: dlMeta(id) };
+  const busy = dlBusy = { id, choice, abort, percent: null, preparing: true, meta: dlMeta(id) };
   if (onBusy) onBusy(busy);
   const aborted = () => new DOMException('aborted', 'AbortError');
   dlUpdateUnload();
@@ -1134,114 +1058,6 @@ async function browserDownload(id, choice, onBusy) {
     if (abort.signal.aborted) throw aborted();
     throw e;
   }
-}
-
-// האיכות בשרת: הגובה הקרוב שהשרת מכיר (DRIVE_QUALITIES: 1080/720/480/360)
-function dlServerQuality(choice) {
-  if (dlIsAudio(choice)) return { type: 'audio', quality: choice === 'mp3' ? 'mp3' : 'm4a' };
-  const c = DL_CHOICES.find(x => x.value === choice);
-  const height = c ? c.height : (/^\d+$/.test(String(choice)) ? +choice : 720);
-  const q = [1080, 720, 480, 360].find(x => x <= height) || 360;
-  return { type: 'video', quality: String(q) };
-}
-
-function listenJobs() {
-  if (dlListening || !hasDrive() || typeof Platform.drive.onJob !== 'function') return;
-  dlListening = true;
-  Platform.drive.onJob(j => { try { onServerJob(j); } catch {} });
-}
-
-async function serverDownload(id, choice, fallback) {
-  if (dlBusy) return;
-  if (!hasDrive()) return dlFail(null, id, choice, { text: MSG.failed() });
-  listenJobs();
-  const { type, quality } = dlServerQuality(choice);
-  const busy = dlBusy = { id, choice, kind: 'server', percent: null, preparing: true, meta: dlMeta(id) };
-  dlUpdateUnload();
-  refreshDownloadButtons();
-  dlShowProgress(busy);
-  let r, meta = null;
-  try {
-    let info = null;
-    try { if (dlInfo.has(id)) info = await dlInfo.get(id); } catch {}
-    meta = dlMeta(id, info);
-    busy.meta = meta;
-    r = await Platform.drive.start({ url: 'https://www.youtube.com/watch?v=' + id, videoId: id, type, quality, title: meta.title });
-  } catch (e) {
-    r = { ok: false, error: { code: 'INTERNAL', message: e.message } };
-  }
-  if (dlBusy !== busy) return; // בוטל בינתיים
-  if (r && r.job) {
-    busy.localId = r.job.localId;
-    dlServerJobs.set(r.job.localId, { id, choice, meta });
-    onServerJob(r.job);
-  } else {
-    dlFail(busy, id, choice, dlServerFailToast(r && r.error));
-  }
-}
-
-function onServerJob(j) {
-  if (!j || !j.localId) return;
-  const mine = dlServerJobs.get(j.localId);
-  if (!mine) return;
-  const busy = dlBusy && dlBusy.localId === j.localId ? dlBusy : null;
-  if (isActiveJob(j)) {
-    if (busy) {
-      busy.preparing = j.state === 'queued' || j.state === 'checking';
-      busy.percent = j.state === 'downloading' && typeof j.percent === 'number' ? j.percent
-        : ['converting', 'copying', 'uploading', 'shortening'].includes(j.state) ? 99 : busy.percent;
-      refreshDownloadButtons();
-      dlShowProgress(busy);
-    }
-    return;
-  }
-  const code = j.error && j.error.code;
-  // שיתוף עוגיות פעיל בתוסף: ה-service worker מנסה שוב באותה עבודה
-  // ה-service worker מסמן cookieRetryDeclined כשהניסיון לא יוצא לדרך; בנוסף בודקים שוב מעצמנו,
-  // כדי שהכפתור לא יישאר מסתובב אם השידור הלך לאיבוד
-  if (j.state === 'error' && code === 'YT_BOT_CHECK' && S.shareCookies && Platform.drive.canShareCookies
-    && !j.cookieRetry && !j.cookieRetryDeclined && !mine.gaveUp) {
-    if (busy) dlResyncLater(busy, j);
-    return;
-  }
-  dlServerJobs.delete(j.localId);
-  if (j.state === 'done') {
-    dlSetDone(mine.id, true, { ...(mine.meta || {}), title: (mine.meta && mine.meta.title) || j.title || '' });
-    // www: "לצפייה בסרטון" פותח את דף ההורדות כמו ב-Premium; באתרים בלי דף הורדות – הקובץ בדרייב
-    const url = j.drive_url || j.short_url || j.view_url;
-    const action = dlViewAction() || (url ? { label: MSG.view(), run: () => window.open(url, '_blank', 'noopener') } : null);
-    const endToast = { text: MSG.downloaded(), action };
-    if (busy) dlFinish(busy, endToast);
-    else ytToast(endToast);
-    return;
-  }
-  const endToast = dlServerFailToast(j.error);
-  if (busy) dlFail(busy, mine.id, mine.choice, endToast);
-  else { dlFailed.set(mine.id, mine.choice); refreshDownloadButtons(); ytToast(endToast); }
-}
-
-// ממתינים לניסיון החוזר עם עוגיות: כל 30 שניות בודקים את רשימת העבודות, ואחרי 5 דקות בלי שינוי מסיימים
-const DL_RESYNC_MS = 30 * 1000;
-const DL_RESYNC_MAX = 5 * 60 * 1000;
-function dlResyncLater(busy, j) {
-  if (busy.resync) return;
-  const started = Date.now();
-  const check = async () => {
-    busy.resync = 0;
-    if (dlBusy !== busy) return;
-    let cur = null;
-    try { cur = (await Platform.drive.jobs()).find(x => x && x.localId === j.localId) || null; } catch {}
-    if (dlBusy !== busy) return;
-    const waiting = !cur || (cur.state === 'error' && !cur.cookieRetry && !cur.cookieRetryDeclined);
-    if (!waiting) return onServerJob(cur);
-    if (Date.now() - started >= DL_RESYNC_MAX) {
-      const mine = dlServerJobs.get(j.localId);
-      if (mine) mine.gaveUp = true;
-      return onServerJob(cur || j);
-    }
-    busy.resync = setTimeout(check, DL_RESYNC_MS);
-  };
-  busy.resync = setTimeout(check, DL_RESYNC_MS);
 }
 
 // דיאלוג "איכות ההורדה" כמו ytd-download-quality-selector-renderer[dialog] (נמדד ב-CSS של יוטיוב, 16/09/2026):

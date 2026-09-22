@@ -17,7 +17,7 @@ const ctx = {
   uiText: he => he, uiHebrew: () => true,
 };
 vm.createContext(ctx);
-vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, dlServerFailToast, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, dlServerQuality, id3, lamejs, toMp3, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText });', ctx);
+vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText });', ctx);
 
 (async () => {
   // מדרגות הטבעת כמו updateProgress של יוטיוב
@@ -36,13 +36,9 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert(doneItem.navigationEndpoint.watchEndpoint);
   assert.strictEqual(doneItem.menu.menuRenderer.items[0].menuServiceItemRenderer.serviceEndpoint.offlineVideoEndpoint.action, 'ACTION_REMOVE');
 
-  // טוסט כישלון: "ההורדה נכשלה" בלי פעולה מומצאת; דרייב מלא → "האחסון מלא"
-  ctx.Platform = { drive: {} };
-  const t = ctx.dlServerFailToast({ code: 'VIDEO_FILE_BLOCKED' });
-  assert.strictEqual(t.text, 'ההורדה נכשלה');
-  assert(!t.action);
-  assert.strictEqual(ctx.dlServerFailToast({ code: 'DRIVE_FULL' }).text, 'האחסון מלא');
-  assert.strictEqual(ctx.dlServerFailToast({ code: 'WHATEVER', message: 'x' }).sub, null);
+  // הטקסטים של יוטיוב לכישלון
+  assert.strictEqual(ctx.MSG.failed(), 'ההורדה נכשלה');
+  assert.strictEqual(ctx.MSG.storageFull(), 'האחסון מלא');
 
   // fetchFile: 403 לא מנסים שוב, ושאר החלקים נעצרים (בלי עוד בקשות שייכשלו)
   const calls = [];
@@ -88,14 +84,10 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert.deepStrictEqual(ctx.dlDoneList().map(x => x.id), ['aaaaaaaaaaa', 'bbbbbbbbbbb']);
   assert.strictEqual(ctx.dlRemoveNow('ccccccccccc'), false);
 
-  // MP3: אפשרות בדיאלוג, מיפוי לשרת, ותג ID3 עם כותרת בעברית
+  // MP3: אפשרות בדיאלוג ותג ID3 עם כותרת בעברית
   assert(ctx.DL_CHOICES.some(c => c.value === 'mp3' && c.mp3));
   assert.strictEqual(ctx.dlIsAudio('mp3'), true);
   assert.strictEqual(ctx.dlIsAudio('720'), false);
-  const sq = c => ctx.dlServerQuality(c).type + '/' + ctx.dlServerQuality(c).quality;
-  assert.strictEqual(sq('mp3'), 'audio/mp3');
-  assert.strictEqual(sq('audio'), 'audio/m4a');
-  assert.strictEqual(sq('720'), 'video/720');
   const tag = ctx.id3('שיר', 'אמן');
   assert.strictEqual(String.fromCharCode(tag[0], tag[1], tag[2]), 'ID3');
   assert.strictEqual(tag[3], 3);

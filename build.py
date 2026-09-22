@@ -14,9 +14,7 @@ SRC = ROOT / "src"
 EXT = ROOT / "extension"
 
 # סדר הקבצים בחבילה שרצה בדף. כל הקבצים חולקים scope אחד (בתוך IIFE).
-# drive-client.js לפני settings.js: ברירת המחדל של serverUrl היא DRIVE_DEFAULT_SERVER,
-# ו-const שמוגדר אחר כך באותו scope זורק שגיאה (TDZ) גם ב-typeof.
-CORE = ["drive-client.js", "settings.js"]
+CORE = ["settings.js"]
 BUNDLE = [
     "mux.js",
     "features/util.js",
@@ -50,7 +48,7 @@ def build_extension():
     if EXT.exists():
         shutil.rmtree(EXT)
     EXT.mkdir()
-    for name in ["manifest.json", "background.js", "drive-client.js", "settings.js", "bridge.js", "popup.html", "popup.js"]:
+    for name in ["manifest.json", "settings.js", "bridge.js", "popup.html", "popup.js"]:
         shutil.copy(SRC / name, EXT / name)
     shutil.copytree(SRC / "icons", EXT / "icons")
     note = "// נוצר אוטומטית ע\"י build.py מתוך src/ – לא לערוך ישירות.\n"
@@ -67,7 +65,7 @@ def build_userscript(version):
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
 // @version      {version}
-// @description  בלי פרסומות, ניגון ברקע, הורדת סרטונים (גם דרך שרת Drive), חלון צף, איכות מרבית ומהירויות עד פי 4
+// @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
 // @match        *://music.youtube.com/*

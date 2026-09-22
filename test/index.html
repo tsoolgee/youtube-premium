@@ -21,48 +21,7 @@ if (Q.get('msgs') !== '0') window.yt = { msgs_: Q.get('lang') === 'en'
 history.replaceState(null, '', '/test/index.html?v=jNQXAC9IVRw');
 const realFetch = window.fetch;
 
-// דמה של ממסר ה-Drive (script.google.com). לא יוצאת שום בקשה לשרת האמיתי.
-// __relay.mode: 'ok' | 'bot' (YT_BOT_CHECK) | 'blocked' (VIDEO_FILE_BLOCKED) | 'offline'
-window.__relay = { mode: 'ok', calls: [], jobs: {}, seq: 0, acceptCookies: true };
-function relayAnswer(env) {
-  const R = window.__relay;
-  R.calls.push(env);
-  if (R.mode === 'offline') return { status: 502, body: '<html>Bad gateway</html>' };
-  const p = env.path || '';
-  if (p === '/health') return { ok: true, service: 'yt-drive', accept_cookies: R.acceptCookies, cookies: 0 };
-  if (p === '/queue') return { ok: true, queued: 0, active: 0, accept_cookies: R.acceptCookies, cookies: 0 };
-  if (p === '/cookies') return { ok: true, message: 'mock', pool: 1 };
-  if (p === '/download') {
-    const b = env.body || {};
-    if (!b.url) return { ok: false, error: { code: 'BAD_URL', message: 'אין קישור' } };
-    const id = 'job' + (++R.seq);
-    R.jobs[id] = { polls: 0, mode: R.mode, body: b };
-    return { ok: true, job_id: id, state: 'queued' };
-  }
-  const m = p.match(/^\/status\/(.+)$/);
-  if (m) {
-    const j = R.jobs[decodeURIComponent(m[1])];
-    if (!j) return { ok: false, error: { code: 'JOB_NOT_FOUND', message: 'העבודה לא נמצאה' } };
-    const n = ++j.polls;
-    if (j.mode === 'bot') return { ok: true, state: 'error', error: { code: 'YT_BOT_CHECK', message: 'יוטיוב ביקש אימות שאינכם בוט' } };
-    if (j.mode === 'blocked' && n >= 2) return { ok: true, state: 'error', error: { code: 'VIDEO_FILE_BLOCKED', message: 'קובץ הווידאו חסום בסינון' } };
-    if (n === 1) return { ok: true, state: 'queued', position: 2, title: 'Me at the zoo' };
-    if (n === 2) return { ok: true, state: 'downloading', stage: 'video', percent: 42.5, title: 'Me at the zoo' };
-    return { ok: true, state: 'done', percent: 100, title: 'Me at the zoo', file_name: 'Me at the zoo.mp4', size: 632000, cached: false,
-      short_url: 'https://did.li/mock1', drive_url: 'https://drive.google.com/uc?id=mock&export=download', view_url: 'https://drive.google.com/file/d/mock/view' };
-  }
-  return { ok: false, error: { code: 'BAD_REQUEST', message: 'נתיב לא מוכר' } };
-}
-
 window.fetch = async (url, opts) => {
-  if (/^https:\/\/script\.google(usercontent)?\.com\//.test(String(url))) {
-    let env = {};
-    try { env = JSON.parse(opts && opts.body || '{}'); } catch {}
-    await new Promise(r => setTimeout(r, 30));
-    const a = relayAnswer(env);
-    if (a.status) return new Response(a.body, { status: a.status });
-    return new Response(JSON.stringify(a), { headers: { 'content-type': 'application/json' } });
-  }
   if (String(url).includes('/youtubei/v1/player')) {
     window.__playerRequest = JSON.parse(opts.body);
     if (window.__failPlayer) return new Response('blocked', { status: 418 });
@@ -88,8 +47,6 @@ window.fetch = async (url, opts) => {
 const attach = Element.prototype.attachShadow; Element.prototype.attachShadow = function (o) { return attach.call(this, { ...o, mode: 'open' }); };
 HTMLAnchorElement.prototype.click = function () { window.__saved = { name: this.download, href: this.href }; };
 window.open = (u) => { window.__opened = u; return null; };
-// מצב נקי בכל טעינה
-try { localStorage.removeItem('ytu-drive-jobs'); localStorage.removeItem('ytu-drive-poller'); } catch {}
 </script>
 <script src="/userscript/youtube-premium.user.js"></script>
 <style>.ytp-variable-speed-panel-premium-badge{display:block;opacity:0;visibility:hidden}.ytp-variable-speed-panel-premium-badge-visible{opacity:1;visibility:visible}.ytp-variable-speed-panel-badge{width:14px;height:14px;background:#f03;border-radius:3px}.ytp-bezel-text-hide .ytp-bezel-text{display:none}</style>

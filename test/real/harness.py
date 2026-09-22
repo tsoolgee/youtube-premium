@@ -135,15 +135,6 @@ async def main():
             args=args, accept_downloads=True, color_scheme="dark" if A.dark else "light", locale=A.lang, **view)
         # הדיאלוג שלנו ב-shadow סגור; בבדיקה פותחים אותו כדי שאפשר יהיה ללחוץ בתוכו
         await ctx.add_init_script("(() => { const a = Element.prototype.attachShadow; Element.prototype.attachShadow = function (o) { return a.call(this, { ...o, mode: 'open' }); }; })()")
-        # אסור להתחיל עבודות אמיתיות בשרת ה-Drive: הורדה בדפדפן בלבד, כתובת שרת מתה, וחסימת הממסר
-        await ctx.route("**/script.google.com/**", lambda r: r.abort())
-        await ctx.route("**/script.googleusercontent.com/**", lambda r: r.abort())
-        mine = lambda w: w.url.startswith("chrome-extension://") and w.url.endswith("/background.js")
-        sw = next((w for w in ctx.service_workers if mine(w)), None)
-        while not sw:
-            w = await ctx.wait_for_event("serviceworker", timeout=30000)
-            sw = w if mine(w) else None
-        await sw.evaluate("() => new Promise(r => chrome.storage.local.set({ settings: { downloadMethod: 'browser', serverUrl: 'http://127.0.0.1:9' } }, r))")
         page = await ctx.new_page()
         page.on("console", lambda m: m.type == "error" and report.setdefault("console_errors", []).append(m.text[:300]))
         page.on("pageerror", lambda e: report.setdefault("page_errors", []).append(str(e)[:300]))

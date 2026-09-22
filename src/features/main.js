@@ -12,12 +12,8 @@ function applySettings() {
 function update(patch) {
   Object.assign(S, patch);
   const saved = {};
-  for (const s of SETTINGS) {
-    // בתוסף הסוד, כתובת השרת וההסכמה לעוגיות נקבעים בחלון התוסף; הגשר שומר את הערכים הקיימים
-    if ((s.secret || s.popupOnly) && Platform.kind === 'extension') continue;
-    saved[s.key] = S[s.key];
-  }
-  Platform.save(storableSettings(saved));
+  for (const s of SETTINGS) saved[s.key] = S[s.key];
+  Platform.save(saved);
   applySettings();
 }
 
