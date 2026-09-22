@@ -64,6 +64,8 @@
       ] },
     { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
       labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
+    { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
+      labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
     { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
       labelEn: 'H.264 only (plays everywhere)', descEn: 'Hides qualities YouTube only offers in AV1 (usually 1440p and 4K) – the Windows player shows them as audio only without the AV1 extension' },
   ];
@@ -3031,7 +3033,59 @@
     if (officialOn()) unhideOfficial();
     obBadgeCss();
     if (SITE === 'mobile') { ensureMobileDownloadButton(); ensureMobileSheetDownload(); }
-    if (SITE === 'www') ensureDesktopMenuDownload();
+    if (SITE === 'www') { ensureDesktopRowDownload(); ensureDesktopMenuDownload(); }
+  }
+
+  // www: "הורדה" תמיד בשורת הכפתורים הראשית, אחרי "שיתוף" (הגדרה downloadInRow, ברירת מחדל).
+  // יוטיוב שם את ההורדה באזור ה"גמיש" ומעביר אותה לתפריט ⋮ כשאין מקום (נבדק ב-800px: לייק, שיתוף – וזהו).
+  // משכפלים את כפתור "שיתוף" של יוטיוב (אותו עיצוב בדיוק), ומסתירים את הכפתור הגמיש שלא יהיה כפול.
+  const DL_ROW_CSS_ID = 'ytu-dl-row-css';
+  function ensureDesktopRowDownload() {
+    const on = officialOn() && S.downloadInRow !== false && !!videoId();
+    let css = document.getElementById(DL_ROW_CSS_ID);
+    if (!css) {
+      css = document.createElement('style');
+      css.id = DL_ROW_CSS_ID;
+      css.textContent = 'ytd-watch-metadata #flexible-item-buttons ytd-download-button-renderer { display: none !important; }';
+      (document.head || document.documentElement).append(css);
+    }
+    const rows = [...document.querySelectorAll('ytd-watch-metadata #top-level-buttons-computed')];
+    if (css.disabled === on) css.disabled = !on;
+    for (const row of rows) {
+      let mine = row.querySelector(`:scope > * [${DL_MWEB_ATTR}]`);
+      let host = mine && mine.closest('#top-level-buttons-computed > *');
+      if (!on) { if (host) host.remove(); continue; }
+      const share = [...row.children].find(c => c !== host && /שיתוף|share/i.test((c.querySelector('button') || c).getAttribute('aria-label') || ''));
+      if (host) {
+        // יוטיוב מצייר את השורה מחדש – מוודאים שהכפתור עדיין אחרי "שיתוף"
+        if (share && host.previousElementSibling !== share) share.after(host);
+        continue;
+      }
+      if (!share || !share.querySelector('button')) continue;
+      const clone = share.cloneNode(true);
+      const btn = clone.querySelector('button');
+      btn.setAttribute(DL_MWEB_ATTR, '');
+      btn.setAttribute('aria-label', MSG.download());
+      btn.removeAttribute('aria-pressed');
+      const txt = clone.querySelector(DL_TEXT_SLOT);
+      if (txt) txt.textContent = MSG.download();
+      // האייקון: svg משלנו במקום זה של "שיתוף" (שנטען בנפרד ולפעמים עוד ריק)
+      const slot = clone.querySelector('.yt-icon-shape, .ytIconWrapperHost, ' + DL_ICON_SLOT);
+      if (slot) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('width', '24');
+        svg.setAttribute('height', '24');
+        svg.setAttribute('fill', 'currentColor');
+        svg.style.display = 'block';
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', MWEB_DOWNLOAD_PATH);
+        svg.append(path);
+        slot.replaceChildren(svg);
+      }
+      share.after(clone);
+      try { refreshDownloadButtons(); } catch {}
+    }
   }
 
   // www: יוטיוב לא תמיד מציע "הורדה" – לא בשורת הכפתורים ולא בתפריט ⋮ (סרטונים שגם מנוי לא יכול להוריד,
@@ -3041,7 +3095,7 @@
   function desktopMenuContext() {
     if (!lastOpener || Date.now() - lastOpener.at > 15000) return null;
     if (lastOpener.el.closest('ytd-watch-metadata #actions')) {
-      const rowButton = [...document.querySelectorAll('ytd-watch-metadata ytd-download-button-renderer')].some(obVisible);
+      const rowButton = [...document.querySelectorAll(`ytd-watch-metadata ytd-download-button-renderer, ytd-watch-metadata [${DL_MWEB_ATTR}]`)].some(obVisible);
       return videoId() && !rowButton ? { kind: 'watch', id: videoId() } : null;
     }
     const ctx = contextVideo(lastOpener.path);
