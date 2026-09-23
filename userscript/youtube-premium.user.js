@@ -42,8 +42,13 @@
       labelEn: 'Background play', descEn: 'Keeps playing in another tab or when minimized, without "Still watching?"' },
     { key: 'pip', type: 'bool', group: 'watch', def: true, label: 'תמונה בתוך תמונה', desc: 'אפשר לצפות בחלון צף מעל כל החלונות',
       labelEn: 'Picture-in-picture', descEn: 'Watch in a floating window above other windows' },
-    { key: 'autoPip', type: 'bool', group: 'watch', def: true, label: 'חלון צף אוטומטי', desc: 'במובייל (m.youtube): עובר לחלון צף כשיוצאים מהלשונית באמצע ניגון',
-      labelEn: 'Automatic picture-in-picture', descEn: 'On mobile (m.youtube): switches to a floating window when you leave the tab while playing' },
+    { key: 'autoPip', type: 'select', group: 'watch', def: 'mobile', label: 'חלון צף אוטומטי', desc: 'מעבר לחלון צף כשיוצאים מהלשונית באמצע ניגון. במחשב צריך Chrome 134 ומעלה, והדפדפן מבקש אישור בפעם הראשונה',
+      labelEn: 'Automatic picture-in-picture', descEn: 'Switches to a floating window when you leave the tab while playing. On desktop it needs Chrome 134+, and the browser asks for permission the first time',
+      options: [
+        { value: 'off', label: 'כבוי', labelEn: 'Off' },
+        { value: 'mobile', label: 'רק בטלפון (m.youtube)', labelEn: 'Mobile only (m.youtube)' },
+        { value: 'always', label: 'גם במחשב', labelEn: 'On desktop too' },
+      ] },
     { key: 'maxQuality', type: 'bool', group: 'watch', def: false, label: 'איכות מרבית', desc: 'נועל כל סרטון על האיכות הגבוהה ביותר במקום "אוטומטי" של יוטיוב',
       labelEn: 'Highest quality', descEn: 'Locks every video to the highest quality instead of YouTube’s Auto' },
     { key: 'speed', type: 'bool', group: 'watch', def: true, label: 'מהירויות Premium', desc: 'מהירויות Premium עד פי 4 בתפריט המהירות',
@@ -64,13 +69,13 @@
       ] },
     { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
       labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
-    { key: 'mp3Bitrate', type: 'select', group: 'download', def: '192', label: 'איכות MP3', desc: 'קצב הסיביות בהמרה ל-MP3. גבוה יותר = קובץ גדול יותר',
+    { key: 'mp3Bitrate', type: 'select', group: 'download', def: '320', label: 'איכות MP3', desc: 'קצב הסיביות בהמרה ל-MP3. גבוה יותר = קובץ גדול יותר',
       labelEn: 'MP3 quality', descEn: 'Bitrate for MP3 conversion. Higher = bigger file',
       options: [
         { value: '128', label: '128 kbps', labelEn: '128 kbps' },
-        { value: '192', label: '192 kbps (ברירת מחדל)', labelEn: '192 kbps (default)' },
+        { value: '192', label: '192 kbps', labelEn: '192 kbps' },
         { value: '256', label: '256 kbps', labelEn: '256 kbps' },
-        { value: '320', label: '320 kbps (הכי טוב)', labelEn: '320 kbps (best)' },
+        { value: '320', label: '320 kbps (ברירת מחדל)', labelEn: '320 kbps (default)' },
       ] },
     { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
       labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
@@ -81,7 +86,11 @@
   const DEFAULTS = Object.fromEntries(SETTINGS.map(s => [s.key, s.def]));
 
   // ערכים ישנים (2.1.0): איכות ההורדה high/medium/low היו 1080/720/360
-  const LEGACY_VALUES = { downloadQuality: { high: '1080', medium: '720', low: '360' } };
+  // autoPip היה בוליאני (0.0.6 ומטה): דלוק = רק בטלפון, כמו שהיה
+  const LEGACY_VALUES = {
+    downloadQuality: { high: '1080', medium: '720', low: '360' },
+    autoPip: { true: 'mobile', false: 'off' },
+  };
   function migrateSettings(settings) {
     const out = { ...(settings || {}) };
     for (const [key, map] of Object.entries(LEGACY_VALUES)) {
@@ -1029,9 +1038,12 @@
     }
   } catch {}
 
+  // 'mobile' – רק ב-m.youtube, כמו Premium בטלפון (ברירת המחדל, וכך זה היה עד 0.0.6).
+  // 'always' – גם ב-www וב-Music. כרום מפעיל את זה רק מגרסה 134 ורק כשהסרטון מתנגן ונשמע,
+  // ובפעם הראשונה הוא שואל את המשתמש אם לאשר – ולכן זו בחירה של המשתמש ולא ברירת מחדל.
   function applyAutoPip() {
-    // רק ב-m.youtube (כמו Premium בטלפון). www ו-Music בדסקטופ לא נכנסים לחלון צף לבד – לא נוגעים בהתנהגות של יוטיוב
-    const want = !!(S.pip && S.autoPip && SITE === 'mobile');
+    const mode = S.autoPip;
+    const want = !!(S.pip && (mode === 'always' || (mode === 'mobile' && SITE === 'mobile')));
     if (want === autoPipOn || !navigator.mediaSession) return;
     const first = autoPipOn === null;
     autoPipOn = want;
@@ -1815,7 +1827,7 @@
   // הפענוח ב-WebAudio (מובנה בדפדפן), הקידוד ב-lamejs.
 
   const MP3_RATES = [128, 192, 256, 320];
-  const MP3_DEFAULT_KBPS = 192;
+  const MP3_DEFAULT_KBPS = 320;
   // קצב הסיביות מההגדרות (mp3Bitrate). יותר גבוה = קובץ גדול יותר ואיכות טובה יותר
   const mp3Kbps = () => {
     const v = typeof S !== 'undefined' ? +S.mp3Bitrate : NaN;

@@ -4,7 +4,7 @@
 // הפענוח ב-WebAudio (מובנה בדפדפן), הקידוד ב-lamejs.
 
 const MP3_RATES = [128, 192, 256, 320];
-const MP3_DEFAULT_KBPS = 192;
+const MP3_DEFAULT_KBPS = 320;
 // קצב הסיביות מההגדרות (mp3Bitrate). יותר גבוה = קובץ גדול יותר ואיכות טובה יותר
 const mp3Kbps = () => {
   const v = typeof S !== 'undefined' ? +S.mp3Bitrate : NaN;

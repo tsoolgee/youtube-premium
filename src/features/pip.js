@@ -42,9 +42,12 @@ try {
   }
 } catch {}
 
+// 'mobile' – רק ב-m.youtube, כמו Premium בטלפון (ברירת המחדל, וכך זה היה עד 0.0.6).
+// 'always' – גם ב-www וב-Music. כרום מפעיל את זה רק מגרסה 134 ורק כשהסרטון מתנגן ונשמע,
+// ובפעם הראשונה הוא שואל את המשתמש אם לאשר – ולכן זו בחירה של המשתמש ולא ברירת מחדל.
 function applyAutoPip() {
-  // רק ב-m.youtube (כמו Premium בטלפון). www ו-Music בדסקטופ לא נכנסים לחלון צף לבד – לא נוגעים בהתנהגות של יוטיוב
-  const want = !!(S.pip && S.autoPip && SITE === 'mobile');
+  const mode = S.autoPip;
+  const want = !!(S.pip && (mode === 'always' || (mode === 'mobile' && SITE === 'mobile')));
   if (want === autoPipOn || !navigator.mediaSession) return;
   const first = autoPipOn === null;
   autoPipOn = want;

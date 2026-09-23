@@ -161,12 +161,12 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert(sizes[sizes.length - 1] >= 4 * MB, 'גדל בחזרה בחיבור נקי: ' + sizes.slice(-6).map(n => n / MB).join(','));
 
   // MP3: קצב הסיביות לפי ההגדרה, עם נפילה לברירת מחדל על ערך לא חוקי
-  ctx.S.mp3Bitrate = '320';
-  assert.strictEqual(ctx.mp3Kbps(), 320);
+  ctx.S.mp3Bitrate = '128';
+  assert.strictEqual(ctx.mp3Kbps(), 128);
   ctx.S.mp3Bitrate = '999';
-  assert.strictEqual(ctx.mp3Kbps(), 192);
+  assert.strictEqual(ctx.mp3Kbps(), 320);
   delete ctx.S.mp3Bitrate;
-  assert.strictEqual(ctx.mp3Kbps(), 192);
+  assert.strictEqual(ctx.mp3Kbps(), 320);
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });
