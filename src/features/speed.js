@@ -10,7 +10,7 @@
 
 const SPEED_MAX = 4;
 const SPEED_YT_MAX = 2;
-const SPEED_KEY = 'ytu-speed';
+const SPEED_KEY = 'ytu-speed'; // מגרסאות קודמות – נמחק, המהירות לא נשמרת בין טעינות
 
 // מהירות מעל 2 שביקשנו: הנגן של יוטיוב לא מכיר אותה ומחזיר את האלמנט למהירות שלו
 // (בסוף פרסומת, החלפת איכות, סרטון הבא). שומרים אותה ומחילים שוב – אלא אם המשתמש שינה
@@ -36,9 +36,13 @@ function ytSetRate(p, rate) {
   } catch {}
 }
 
+// כמו ביוטיוב עצמו (נבדק 23/09/2026): המהירות נשמרת בין סרטונים באותה לשונית, אבל ריענון
+// מחזיר ל"רגילה" – יוטיוב לא שומר אותה באחסון. לכן גם אצלנו זה בזיכרון בלבד.
+let speedSaved = null;
+try { localStorage.removeItem(SPEED_KEY); } catch {}
 const speedStore = {
-  get() { try { const r = +localStorage.getItem(SPEED_KEY); return r > SPEED_YT_MAX && r <= SPEED_MAX ? r : null; } catch { return null; } },
-  set(r) { try { if (r > SPEED_YT_MAX) localStorage.setItem(SPEED_KEY, String(r)); else localStorage.removeItem(SPEED_KEY); } catch {} },
+  get() { return speedSaved > SPEED_YT_MAX && speedSaved <= SPEED_MAX ? speedSaved : null; },
+  set(r) { speedSaved = r > SPEED_YT_MAX ? r : null; },
 };
 
 // הנגן של יוטיוב כבר מכיר מהירויות מעל 2 (קיבל את נתוני Premium) – הגיבוי לא פועל
@@ -57,8 +61,10 @@ function setRate(rate) {
   if (!v) return;
   rate = Math.min(SPEED_MAX, Math.max(0.25, Math.round(rate * 20) / 20));
   const p = activePlayer();
-  // מסנכרנים את הנגן של יוטיוב (מה שנשמר לסרטון הבא) עד המקסימום שלו.
-  ytSetRate(p, Math.min(rate, SPEED_YT_MAX));
+  // עד 2 – נותנים לנגן של יוטיוב לקבוע, וזה גם מה שהוא זוכר לסרטון הבא.
+  // מעל 2 לא נוגעים בו: פעם סנכרנו אותו ל-2 (המקסימום שלו), והוא היה מחזיר את הסרטון
+  // ל-2 בכל טעינה, פרסומת או החלפת איכות – משם הגיע ה"חוזר לכפול 2".
+  if (rate <= SPEED_YT_MAX) ytSetRate(p, rate);
   // נמדד לפני שינוי האלמנט: יש גרסאות נגן ש-getPlaybackRate שלהן קורא מהאלמנט עצמו.
   const yt = ytRate(p);
   // גם עד 2: הנגן לא משנה את האלמנט כשהוא כבר "חושב" שהמהירות 2 (למשל 2.25 → 2)
@@ -92,7 +98,7 @@ document.addEventListener('loadeddata', e => {
   const v = e.target;
   if (!S.speed || !(v instanceof HTMLVideoElement) || v.closest(PREVIEW_SEL)) return;
   if (speedWant && speedWant.v === v) return;
-  // הנגן כבר תומך ב-Premium בעצמו (ושומר את המהירות ב-yt-player-playback-rate) – הגיבוי לא מתחרה בו
+  // הנגן כבר תומך ב-Premium בעצמו – הגיבוי לא מתחרה בו
   if (nativePremium(activePlayer())) { speedStore.set(null); return; }
   const saved = speedStore.get();
   if (!saved || document.querySelector('.html5-video-player.ad-showing')) return;
