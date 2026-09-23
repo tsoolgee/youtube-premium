@@ -13,8 +13,13 @@ const CLIENT = {
 };
 // חלקים קטנים: על חיבור מסונן (נטפרי) בקשות וידאו ארוכות נחתכות באקראי באמצע,
 // ואז יש פחות מה לחזור עליו. RETRIES = ניסיונות רצופים *בלי* התקדמות.
-const CHUNK = 4 * 1024 * 1024;
-const LANES = 4;
+// חלוקה מסתגלת: מתחילים גדול (פחות בקשות = מהר יותר), ומקטינים כשהחיבור חותך באמצע
+// (נטפרי חותך בקשות גדולות באקראי). כשכמה חלקים עוברים נקי – מגדילים בחזרה.
+const CHUNK_START = 8 * 1024 * 1024;
+const CHUNK_MIN = 1024 * 1024;
+const CHUNK_MAX = 16 * 1024 * 1024;
+const CLEAN_TO_GROW = 4;   // חלקים רצופים בלי חיתוך לפני הגדלה
+const LANES = 6;
 const RETRIES = 8;
 
 async function fetchStreams(id, signal) {
@@ -94,16 +99,26 @@ async function fetchFile(format, onBytes, signal) {
     throw err;
   }
 
-  const ranges = [];
-  for (let a = 0; a < total; a += CHUNK) ranges.push([a, Math.min(a + CHUNK, total) - 1]);
+  // הטווחים נחתכים תוך כדי, לפי הגודל הנוכחי
+  let chunk = Math.min(CHUNK_START, Math.max(CHUNK_MIN, total));
+  let cursor = 0, clean = 0;
+  const nextRange = () => {
+    if (cursor >= total) return null;
+    const a = cursor;
+    const b = Math.min(cursor + chunk, total) - 1;
+    cursor = b + 1;
+    return [a, b];
+  };
+  const shrink = () => { chunk = Math.max(CHUNK_MIN, Math.floor(chunk / 2)); clean = 0; };
+  const grew = () => { if (++clean >= CLEAN_TO_GROW) { chunk = Math.min(CHUNK_MAX, chunk * 2); clean = 0; } };
   // תקלה סופית באחד החלקים עוצרת גם את השאר – בלי עוד בקשות שייכשלו (403 על קישור שפג וכו')
   const stop = new AbortController();
   let fatal = null;
   const onAbort = () => stop.abort();
   signal.addEventListener('abort', onAbort, { once: true });
   const worker = async () => {
-    for (let range; !stop.signal.aborted && (range = ranges.shift());) {
-      let [pos, end] = range, tries = 0;
+    for (let range; !stop.signal.aborted && (range = nextRange());) {
+      let [pos, end] = range, tries = 0, cut = false;
       while (pos <= end) {
         const before = pos;
         try {
@@ -131,13 +146,15 @@ async function fetchFile(format, onBytes, signal) {
           // כל עוד הבקשה הביאה בייטים חדשים – החיתוך לא "תקלה", רק המשך מכאן
           tries = pos > before ? 0 : tries + 1;
           if (e.fatal || tries > RETRIES) { fatal = fatal || e; stop.abort(); throw e; }
+          if (!cut) { cut = true; shrink(); } // החיבור חותך – חלקים קטנים יותר מכאן
           await sleep(300 * tries);
         }
       }
+      if (!cut) grew();
     }
   };
   try {
-    await Promise.all(Array.from({ length: Math.min(LANES, ranges.length) }, worker));
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(LANES, Math.ceil(total / chunk))) }, worker));
   } catch (e) {
     throw signal.aborted ? e : fatal || e;
   } finally {

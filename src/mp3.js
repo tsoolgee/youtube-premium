@@ -3,7 +3,13 @@
 // ולכן – בניגוד למיזוג הווידאו – כאן כן יש אובדן איכות וכן לוקח זמן.
 // הפענוח ב-WebAudio (מובנה בדפדפן), הקידוד ב-lamejs.
 
-const MP3_KBPS = 192;
+const MP3_RATES = [128, 192, 256, 320];
+const MP3_DEFAULT_KBPS = 192;
+// קצב הסיביות מההגדרות (mp3Bitrate). יותר גבוה = קובץ גדול יותר ואיכות טובה יותר
+const mp3Kbps = () => {
+  const v = typeof S !== 'undefined' ? +S.mp3Bitrate : NaN;
+  return MP3_RATES.includes(v) ? v : MP3_DEFAULT_KBPS;
+};
 const mp3T = (he, en) => (typeof uiText === 'function' ? uiText(he, en) : he);
 
 // ID3v2.3: כותרת + פריימים של טקסט ב-UTF-16LE (הקידוד היחיד בגרסה 2.3
@@ -70,7 +76,7 @@ async function toMp3(parts, meta, onProgress) {
   }
 
   const ch = Math.min(2, audio.numberOfChannels);
-  const enc = new lamejs.Mp3Encoder(ch, audio.sampleRate, MP3_KBPS);
+  const enc = new lamejs.Mp3Encoder(ch, audio.sampleRate, mp3Kbps());
   const L = audio.getChannelData(0);
   const R = ch > 1 ? audio.getChannelData(1) : null;
 

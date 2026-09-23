@@ -17,7 +17,7 @@ const ctx = {
   uiText: he => he, uiHebrew: () => true,
 };
 vm.createContext(ctx);
-vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText });', ctx);
+vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText });', ctx);
 
 (async () => {
   // מדרגות הטבעת כמו updateProgress של יוטיוב
@@ -48,10 +48,10 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
     if (opts.signal.aborted) throw new DOMException('aborted', 'AbortError');
     return { ok: false, status: 403 };
   };
-  const total = 4 * 1024 * 1024 * 6; // 6 חלקים (CHUNK = 4MB)
+  const total = 8 * 1024 * 1024 * 6; // 6 חלקים בגודל ההתחלתי (8MB)
   await assert.rejects(ctx.fetchFile({ url: 'https://x/videoplayback?a=1', contentLength: String(total) }, noop, new AbortController().signal),
     e => e.expired === true && /403/.test(e.message));
-  assert(calls.length <= 4, 'לא יותר מבקשה אחת לכל worker (LANES=4): ' + calls.length);
+  assert(calls.length <= 6, 'לא יותר מבקשה אחת לכל worker (LANES=6): ' + calls.length);
   assert(calls.every(u => /&range=\d+-\d+$/.test(u)));
 
   // fetchFile: טווחים בדיוק עד סוף הקובץ, ו-5xx כן מנסים שוב
@@ -65,11 +65,11 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
     let sent = false;
     return { ok: true, body: { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: buf })) }) } };
   };
-  const size = 4 * 1024 * 1024 * 2 + 5; // 3 חלקים של 4MB
+  const size = 8 * 1024 * 1024 + 5; // חלק שלם של 8MB ועוד שארית
   const out = await ctx.fetchFile({ url: 'https://x/videoplayback?a=1', contentLength: String(size) }, noop, new AbortController().signal);
   assert.strictEqual(out.length, size);
   assert(ranges.every(([, b]) => b <= size - 1));
-  assert.strictEqual(ranges.length, 4); // 3 חלקים + ניסיון חוזר אחד
+  assert.strictEqual(ranges.length, 3); // 2 חלקים + ניסיון חוזר אחד
 
   // הסרה מתפריט: מיד, וטוסט "ביטול" מחזיר את הרשומה
   let toast = null;
@@ -137,6 +137,36 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert.strictEqual(all.map(c => c.value).join(','), '2160,1080,720,audio,mp3');
   assert.ok(/AV1/.test(all[0].he));
   ctx.S.h264Only = true;
+
+  // חלוקה מסתגלת: חיתוך באמצע מקטין את החלקים, וחיבור נקי מגדיל אותם
+  const sizes = [];
+  let cutLeft = 2;
+  ctx.fetch = async url => {
+    const [a, b] = url.split('&range=')[1].split('-').map(Number);
+    const want = b - a + 1;
+    sizes.push(want);
+    const send = cutLeft-- > 0 ? Math.floor(want / 4) : want; // שתי הבקשות הראשונות נחתכות
+    const buf = new Uint8Array(send);
+    let sent = false;
+    return { ok: true, body: { getReader: () => ({ read: async () => (sent ? { done: true } : (sent = true, { done: false, value: buf })) }) } };
+  };
+  const big = 8 * 1024 * 1024 * 10;
+  const out2 = await ctx.fetchFile({ url: 'https://x/videoplayback?a=1', contentLength: String(big) }, noop, new AbortController().signal);
+  assert.strictEqual(out2.length, big);
+  const MB = 1024 * 1024;
+  assert.strictEqual(sizes[0], 8 * MB);                       // מתחילים ב-8MB
+  const news = sizes.filter((n, i) => i > 5);                 // אחרי החיתוכים
+  assert(news.some(n => n <= 4 * MB), 'הוקטן אחרי חיתוך: ' + sizes.slice(0, 12).map(n => n / MB).join(','));
+  assert(sizes.every(n => n >= MB && n <= 16 * MB), 'בתוך הגבולות');
+  assert(sizes[sizes.length - 1] >= 4 * MB, 'גדל בחזרה בחיבור נקי: ' + sizes.slice(-6).map(n => n / MB).join(','));
+
+  // MP3: קצב הסיביות לפי ההגדרה, עם נפילה לברירת מחדל על ערך לא חוקי
+  ctx.S.mp3Bitrate = '320';
+  assert.strictEqual(ctx.mp3Kbps(), 320);
+  ctx.S.mp3Bitrate = '999';
+  assert.strictEqual(ctx.mp3Kbps(), 192);
+  delete ctx.S.mp3Bitrate;
+  assert.strictEqual(ctx.mp3Kbps(), 192);
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });

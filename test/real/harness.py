@@ -130,7 +130,7 @@ async def main():
             args.append("--headless=new")
         view = dict(viewport={"width": A.width, "height": 780}, user_agent=MOBILE_UA, is_mobile=True, has_touch=True, device_scale_factor=2) if A.mobile else dict(viewport={"width": 1400, "height": 950})
         ctx = await p.chromium.launch_persistent_context(
-            profile, headless=False, executable_path=EDGE, proxy={"server": A.proxy},
+            profile, headless=False, executable_path=EDGE, proxy=({"server": A.proxy} if A.proxy and A.proxy.lower() not in ("none", "direct", "") else None),
             ignore_default_args=["--disable-extensions", "--disable-component-extensions-with-background-pages"],
             args=args, accept_downloads=True, color_scheme="dark" if A.dark else "light", locale=A.lang, **view)
         # הדיאלוג שלנו ב-shadow סגור; בבדיקה פותחים אותו כדי שאפשר יהיה ללחוץ בתוכו
@@ -193,7 +193,8 @@ async def main():
         # כפתור ההורדה הרשמי
         await page.evaluate("() => window.scrollTo(0, 450)")
         await asyncio.sleep(2)
-        btn = page.locator("ytd-watch-metadata ytd-download-button-renderer button").first
+        # מגרסה 0.0.5 הכפתור שלנו בשורה הראשית, וזה של יוטיוב מוסתר
+        btn = page.locator("ytd-watch-metadata [data-ytu-mweb-dl], ytd-watch-metadata ytd-download-button-renderer button").first
         count = await btn.count()
         vis = await btn.is_visible() if count else False
         step("download-button", exists=count > 0, visible=vis)

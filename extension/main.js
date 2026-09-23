@@ -47,6 +47,14 @@
       ] },
     { key: 'hookOfficialButton', type: 'bool', group: 'download', def: true, label: 'כפתור ההורדה של יוטיוב', desc: 'כפתור "הורדה" ו"הורדה" בתפריט ⋮ מורידים במקום הצעת Premium',
       labelEn: 'YouTube’s Download button', descEn: 'The Download button and the ⋮ menu item download instead of showing the Premium offer' },
+    { key: 'mp3Bitrate', type: 'select', group: 'download', def: '192', label: 'איכות MP3', desc: 'קצב הסיביות בהמרה ל-MP3. גבוה יותר = קובץ גדול יותר',
+      labelEn: 'MP3 quality', descEn: 'Bitrate for MP3 conversion. Higher = bigger file',
+      options: [
+        { value: '128', label: '128 kbps', labelEn: '128 kbps' },
+        { value: '192', label: '192 kbps (ברירת מחדל)', labelEn: '192 kbps (default)' },
+        { value: '256', label: '256 kbps', labelEn: '256 kbps' },
+        { value: '320', label: '320 kbps (הכי טוב)', labelEn: '320 kbps (best)' },
+      ] },
     { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
       labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
     { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
@@ -1792,7 +1800,13 @@
   // ולכן – בניגוד למיזוג הווידאו – כאן כן יש אובדן איכות וכן לוקח זמן.
   // הפענוח ב-WebAudio (מובנה בדפדפן), הקידוד ב-lamejs.
 
-  const MP3_KBPS = 192;
+  const MP3_RATES = [128, 192, 256, 320];
+  const MP3_DEFAULT_KBPS = 192;
+  // קצב הסיביות מההגדרות (mp3Bitrate). יותר גבוה = קובץ גדול יותר ואיכות טובה יותר
+  const mp3Kbps = () => {
+    const v = typeof S !== 'undefined' ? +S.mp3Bitrate : NaN;
+    return MP3_RATES.includes(v) ? v : MP3_DEFAULT_KBPS;
+  };
   const mp3T = (he, en) => (typeof uiText === 'function' ? uiText(he, en) : he);
 
   // ID3v2.3: כותרת + פריימים של טקסט ב-UTF-16LE (הקידוד היחיד בגרסה 2.3
@@ -1859,7 +1873,7 @@
     }
 
     const ch = Math.min(2, audio.numberOfChannels);
-    const enc = new lamejs.Mp3Encoder(ch, audio.sampleRate, MP3_KBPS);
+    const enc = new lamejs.Mp3Encoder(ch, audio.sampleRate, mp3Kbps());
     const L = audio.getChannelData(0);
     const R = ch > 1 ? audio.getChannelData(1) : null;
 
@@ -1892,8 +1906,13 @@
   };
   // חלקים קטנים: על חיבור מסונן (נטפרי) בקשות וידאו ארוכות נחתכות באקראי באמצע,
   // ואז יש פחות מה לחזור עליו. RETRIES = ניסיונות רצופים *בלי* התקדמות.
-  const CHUNK = 4 * 1024 * 1024;
-  const LANES = 4;
+  // חלוקה מסתגלת: מתחילים גדול (פחות בקשות = מהר יותר), ומקטינים כשהחיבור חותך באמצע
+  // (נטפרי חותך בקשות גדולות באקראי). כשכמה חלקים עוברים נקי – מגדילים בחזרה.
+  const CHUNK_START = 8 * 1024 * 1024;
+  const CHUNK_MIN = 1024 * 1024;
+  const CHUNK_MAX = 16 * 1024 * 1024;
+  const CLEAN_TO_GROW = 4;   // חלקים רצופים בלי חיתוך לפני הגדלה
+  const LANES = 6;
   const RETRIES = 8;
 
   async function fetchStreams(id, signal) {
@@ -1973,16 +1992,26 @@
       throw err;
     }
 
-    const ranges = [];
-    for (let a = 0; a < total; a += CHUNK) ranges.push([a, Math.min(a + CHUNK, total) - 1]);
+    // הטווחים נחתכים תוך כדי, לפי הגודל הנוכחי
+    let chunk = Math.min(CHUNK_START, Math.max(CHUNK_MIN, total));
+    let cursor = 0, clean = 0;
+    const nextRange = () => {
+      if (cursor >= total) return null;
+      const a = cursor;
+      const b = Math.min(cursor + chunk, total) - 1;
+      cursor = b + 1;
+      return [a, b];
+    };
+    const shrink = () => { chunk = Math.max(CHUNK_MIN, Math.floor(chunk / 2)); clean = 0; };
+    const grew = () => { if (++clean >= CLEAN_TO_GROW) { chunk = Math.min(CHUNK_MAX, chunk * 2); clean = 0; } };
     // תקלה סופית באחד החלקים עוצרת גם את השאר – בלי עוד בקשות שייכשלו (403 על קישור שפג וכו')
     const stop = new AbortController();
     let fatal = null;
     const onAbort = () => stop.abort();
     signal.addEventListener('abort', onAbort, { once: true });
     const worker = async () => {
-      for (let range; !stop.signal.aborted && (range = ranges.shift());) {
-        let [pos, end] = range, tries = 0;
+      for (let range; !stop.signal.aborted && (range = nextRange());) {
+        let [pos, end] = range, tries = 0, cut = false;
         while (pos <= end) {
           const before = pos;
           try {
@@ -2010,13 +2039,15 @@
             // כל עוד הבקשה הביאה בייטים חדשים – החיתוך לא "תקלה", רק המשך מכאן
             tries = pos > before ? 0 : tries + 1;
             if (e.fatal || tries > RETRIES) { fatal = fatal || e; stop.abort(); throw e; }
+            if (!cut) { cut = true; shrink(); } // החיבור חותך – חלקים קטנים יותר מכאן
             await sleep(300 * tries);
           }
         }
+        if (!cut) grew();
       }
     };
     try {
-      await Promise.all(Array.from({ length: Math.min(LANES, ranges.length) }, worker));
+      await Promise.all(Array.from({ length: Math.max(1, Math.min(LANES, Math.ceil(total / chunk))) }, worker));
     } catch (e) {
       throw signal.aborted ? e : fatal || e;
     } finally {
