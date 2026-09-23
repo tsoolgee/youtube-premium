@@ -17,7 +17,7 @@ const ctx = {
   uiText: he => he, uiHebrew: () => true,
 };
 vm.createContext(ctx);
-vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText });', ctx);
+vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText, mp3Cover, mp3CoverUrls });', ctx);
 
 (async () => {
   // מדרגות הטבעת כמו updateProgress של יוטיוב
@@ -167,6 +167,41 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert.strictEqual(ctx.mp3Kbps(), 320);
   delete ctx.S.mp3Bitrate;
   assert.strictEqual(ctx.mp3Kbps(), 320);
+
+  // ID3: תמונת שער (APIC) אחרי פריימי הטקסט
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 250, 251]);
+  const pic = ctx.id3('שיר', 'אמן', { mime: 'image/png', bytes: png });
+  const str = (a, b) => String.fromCharCode(...pic.subarray(a, b));
+  assert.strictEqual(str(0, 3), 'ID3');
+  const picSize = (pic[6] << 21) | (pic[7] << 14) | (pic[8] << 7) | pic[9]; // synchsafe
+  assert.strictEqual(picSize, pic.length - 10);
+  // מדלגים על פריימי הטקסט עד ה-APIC
+  let at = 10, seen = [];
+  while (at < pic.length) {
+    const id = str(at, at + 4);
+    const n = (pic[at + 4] << 24) | (pic[at + 5] << 16) | (pic[at + 6] << 8) | pic[at + 7];
+    seen.push(id);
+    if (id === 'APIC') {
+      const body = pic.subarray(at + 10, at + 10 + n);
+      assert.strictEqual(body[0], 0);                              // Latin-1
+      assert.strictEqual(String.fromCharCode(...body.subarray(1, 10)), 'image/png');
+      assert.strictEqual(body[10], 0);                             // סוף ה-MIME
+      assert.strictEqual(body[11], 3);                             // שער קדמי
+      assert.strictEqual(body[12], 0);                             // תיאור ריק
+      assert.strictEqual([...body.subarray(13)].join(), [...png].join());
+    }
+    at += 10 + n;
+  }
+  assert.strictEqual(at, pic.length);
+  assert.deepStrictEqual(seen, ['TIT2', 'TPE1', 'APIC']);
+  // בלי תמונה – בדיוק כמו קודם
+  assert.strictEqual(tag.length, pic.length - (10 + 13 + png.length));
+
+  // כתובות התמונה: מהגדולה לקטנה, ובסוף ברירת המחדל של יוטיוב
+  assert.deepStrictEqual(ctx.mp3CoverUrls({ id: 'abcdefghijk', thumbs: [{ url: 's', width: 120 }, { url: 'L', width: 1280 }] }),
+    ['L', 's', 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg']);
+  // אין תמונה ואין מזהה – יורד בלי שער, בלי לזרוק
+  assert.strictEqual(await ctx.mp3Cover({}), null);
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });

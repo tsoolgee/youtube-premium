@@ -29,7 +29,9 @@ window.fetch = async (url, opts) => {
     return new Response(JSON.stringify({
       playabilityStatus: { status: 'OK' },
       adPlacements: [1], playerAds: [1],
-      videoDetails: { title: 'Me at the zoo: test/1', lengthSeconds: '19' },
+      videoDetails: { title: 'Me at the zoo: test/1', lengthSeconds: '19',
+        // תמונה ממוזערת מקומית – ממנה נבנית תמונת השער של ה-MP3
+        thumbnail: { thumbnails: [{ url: location.origin + '/src/icons/48.png', width: 48, height: 48 }, { url: location.origin + '/src/icons/128.png', width: 128, height: 128 }] } },
       streamingData: { adaptiveFormats: [
         // איכויות נוספות (מצביעות לאותו קובץ 240p) – כדי לבדוק את רשימת כל האפשרויות בדיאלוג
         f(137, 'video/mp4; codecs="avc1.640028"', 3223790, { height: 1080, fps: 60, qualityLabel: '1080p60' }),

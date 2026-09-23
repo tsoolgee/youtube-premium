@@ -1836,8 +1836,8 @@
   const mp3T = (he, en) => (typeof uiText === 'function' ? uiText(he, en) : he);
 
   // ID3v2.3: כותרת + פריימים של טקסט ב-UTF-16LE (הקידוד היחיד בגרסה 2.3
-  // שמכסה עברית). הגודל בכותרת הוא synchsafe – 7 ביטים לבייט.
-  function id3(title, artist) {
+  // שמכסה עברית), ותמונת השער (APIC). הגודל בכותרת הוא synchsafe – 7 ביטים לבייט.
+  function id3(title, artist, cover) {
     const utf16 = s => {
       const b = new Uint8Array(3 + s.length * 2);
       b[0] = 1; b[1] = 0xff; b[2] = 0xfe; // encoding=UTF-16 + BOM
@@ -1858,9 +1858,29 @@
       return f;
     };
 
+    // APIC: בייט קידוד (Latin-1), סוג ה-MIME ואחריו 0, סוג התמונה (3 = שער קדמי),
+    // תיאור ריק ואחריו 0, ואז התמונה עצמה.
+    const picture = pic => {
+      const mime = pic.mime;
+      const body = new Uint8Array(1 + mime.length + 1 + 1 + 1 + pic.bytes.length);
+      let o = 1; // encoding = 0
+      for (let i = 0; i < mime.length; i++) body[o++] = mime.charCodeAt(i) & 255;
+      o++; // סוף מחרוזת ה-MIME
+      body[o++] = 3; // Cover (front)
+      o++; // תיאור ריק
+      body.set(pic.bytes, o);
+      const f = new Uint8Array(10 + body.length);
+      for (let i = 0; i < 4; i++) f[i] = 'APIC'.charCodeAt(i);
+      const n = body.length;
+      f[4] = n >>> 24; f[5] = (n >>> 16) & 255; f[6] = (n >>> 8) & 255; f[7] = n & 255;
+      f.set(body, 10);
+      return f;
+    };
+
     const frames = [];
     if (title) frames.push(frame('TIT2', title));
     if (artist) frames.push(frame('TPE1', artist));
+    if (cover && cover.bytes && cover.bytes.length) frames.push(picture(cover));
     if (!frames.length) return new Uint8Array(0);
 
     const size = frames.reduce((n, f) => n + f.length, 0);
@@ -1871,6 +1891,49 @@
     let o = 10;
     for (const f of frames) { head.set(f, o); o += f.length; }
     return head;
+  }
+
+  // תמונת השער לקובץ: התמונה הממוזערת של הסרטון. חייבת להיות JPEG או PNG –
+  // נגנים לא מכירים WEBP, ולכן פורמט אחר מומר ב-canvas. אם משהו נכשל – מורידים בלי תמונה.
+  const COVER_MAX_BYTES = 800 * 1024;
+  const COVER_MAX_PX = 1000;
+
+  function mp3CoverUrls(meta) {
+    const thumbs = (meta && meta.thumbs) || [];
+    const urls = thumbs
+      .filter(t => t && t.url)
+      .sort((a, b) => (b.width || 0) - (a.width || 0))
+      .map(t => t.url);
+    if (meta && meta.id) urls.push('https://i.ytimg.com/vi/' + meta.id + '/hqdefault.jpg');
+    return urls;
+  }
+
+  async function mp3ToJpeg(blob, max) {
+    const bmp = await createImageBitmap(blob);
+    const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bmp.width * scale));
+    canvas.height = Math.max(1, Math.round(bmp.height * scale));
+    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    const out = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.85));
+    if (!out) throw new Error('canvas');
+    return out;
+  }
+
+  async function mp3Cover(meta) {
+    for (const url of mp3CoverUrls(meta)) {
+      try {
+        const r = await fetch(url, { credentials: 'omit' });
+        if (!r.ok) continue;
+        let blob = await r.blob();
+        const bad = blob.type !== 'image/jpeg' && blob.type !== 'image/png';
+        if (bad || blob.size > COVER_MAX_BYTES) blob = await mp3ToJpeg(blob, COVER_MAX_PX);
+        if (blob.size > COVER_MAX_BYTES) continue;
+        return { mime: blob.type, bytes: new Uint8Array(await blob.arrayBuffer()) };
+      } catch {}
+    }
+    return null;
   }
 
   const toI16 = f => {
@@ -1903,7 +1966,7 @@
     const L = audio.getChannelData(0);
     const R = ch > 1 ? audio.getChannelData(1) : null;
 
-    const out = [id3(meta.title, meta.author)];
+    const out = [id3(meta.title, meta.author, await mp3Cover(meta))];
     const BLOCK = 1152 * 40; // כפולה של גודל פריים MP3
     for (let i = 0; i < L.length; i += BLOCK) {
       const l = toI16(L.subarray(i, i + BLOCK));
@@ -1995,9 +2058,11 @@
 
     if (!audio) throw new Error(dlT('יוטיוב לא החזיר קישורים שאפשר להוריד לסרטון הזה', "YouTube didn't return downloadable links for this video"));
     return {
+      id,
       title: data.videoDetails?.title || document.title.replace(/ - YouTube.*$/, ''),
       author: data.videoDetails?.author || '',
       length: +data.videoDetails?.lengthSeconds || 0,
+      thumbs: data.videoDetails?.thumbnail?.thumbnails || [],
       audio, videos,
     };
   }

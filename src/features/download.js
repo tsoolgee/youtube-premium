@@ -76,9 +76,11 @@ async function fetchStreams(id, signal) {
 
   if (!audio) throw new Error(dlT('יוטיוב לא החזיר קישורים שאפשר להוריד לסרטון הזה', "YouTube didn't return downloadable links for this video"));
   return {
+    id,
     title: data.videoDetails?.title || document.title.replace(/ - YouTube.*$/, ''),
     author: data.videoDetails?.author || '',
     length: +data.videoDetails?.lengthSeconds || 0,
+    thumbs: data.videoDetails?.thumbnail?.thumbnails || [],
     audio, videos,
   };
 }
