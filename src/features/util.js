@@ -20,6 +20,16 @@ function h(tag, props, ...kids) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// מחזיר את השליטה לדפדפן בלי setTimeout: בלשונית שברקע כרום מאט טיימרים (עד פעם בדקה
+// אחרי כמה דקות), ולולאה שנשענת על sleep(0) פשוט נתקעת עד שחוזרים ללשונית.
+// הודעות MessageChannel לא מואטות – ולכן ההמרה ממשיכה גם כשעובדים בחלון אחר.
+const taskWaiters = [];
+const taskChannel = typeof MessageChannel === 'function' ? new MessageChannel() : null;
+if (taskChannel) taskChannel.port1.onmessage = () => { const r = taskWaiters.shift(); if (r) r(); };
+const nextTask = () => (taskChannel
+  ? new Promise(res => { taskWaiters.push(res); taskChannel.port2.postMessage(0); })
+  : sleep(0));
 const onReady = fn => (document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
 
 function videoId() {

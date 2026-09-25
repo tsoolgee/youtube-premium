@@ -150,7 +150,7 @@ async function toMp3(parts, meta, onProgress) {
     const b = R ? enc.encodeBuffer(l, toI16(R.subarray(i, i + BLOCK))) : enc.encodeBuffer(l);
     if (b.length) out.push(new Uint8Array(b));
     onProgress(i / L.length);
-    await sleep(0); // מחזיר את השליטה לדפדפן – אחרת הדף קופא
+    await nextTask(); // מחזיר את השליטה לדפדפן – אחרת הדף קופא (וב-sleep הוא היה נתקע ברקע)
   }
   const tail = enc.flush();
   if (tail.length) out.push(new Uint8Array(tail));

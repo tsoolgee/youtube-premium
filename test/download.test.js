@@ -9,6 +9,7 @@ const ctx = {
   S: { download: true }, SITE: 'www', console, URL, Blob, DOMException, AbortController, Uint8Array, Int8Array, Int16Array, Int32Array, Float32Array, Promise, JSON, Math, Date, Map, Set, WeakMap, String,
   setTimeout, clearTimeout,
   sleep: ms => new Promise(r => setTimeout(r, Math.min(ms, 5))),
+  nextTask: () => Promise.resolve(), // בבנייה האמיתית מגיע מ-util.js
   localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
   window: { addEventListener: noop, removeEventListener: noop, yt: { msgs_: { TRANSFER_FAILED: 'ההורדה נכשלה', VIDEO_COUNT: { case1: 'סרטון אחד', other: '‫# סרטונים' }, DOWNLOADING_PERCENT: 'רגע, תכף נסיים להוריד... $percent%' } } },
   document: { documentElement: { lang: 'he' }, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, title: '' },
@@ -17,7 +18,7 @@ const ctx = {
   uiText: he => he, uiHebrew: () => true,
 };
 vm.createContext(ctx);
-vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlInfoReady, dlSizeText, mp3Cover, mp3CoverUrls });', ctx);
+vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlPickAudio, dlInfoReady, dlSizeText, mp3Cover, mp3CoverUrls });', ctx);
 
 (async () => {
   // מדרגות הטבעת כמו updateProgress של יוטיוב
@@ -167,6 +168,17 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert.strictEqual(ctx.mp3Kbps(), 320);
   delete ctx.S.mp3Bitrate;
   assert.strictEqual(ctx.mp3Kbps(), 320);
+
+  // פס הקול: סרטון מדובב – המקור מנצח גם כשהדיבוב בקצב גבוה יותר
+  const track = (id, name, def, bitrate) => ({ itag: bitrate, bitrate, mimeType: 'audio/mp4; codecs="mp4a.40.2"', audioTrack: { id, displayName: name, audioIsDefault: def } });
+  const dubbed = [track('en.4', 'אנגלית', true, 200), track('he.3', 'עברית (מקור)', false, 130)];
+  assert.strictEqual(ctx.dlPickAudio(dubbed).audioTrack.id, 'he.3', 'בוחרים את פס הקול המקורי');
+  assert.strictEqual(ctx.dlPickAudio([track('en.4', 'English original', false, 130), track('es.5', 'Spanish', true, 200)]).audioTrack.id, 'en.4');
+  // אין "מקור" – ברירת המחדל של יוטיוב
+  assert.strictEqual(ctx.dlPickAudio([track('en.4', 'אנגלית', false, 200), track('he.3', 'עברית', true, 130)]).audioTrack.id, 'he.3');
+  // סרטון רגיל בלי פסי שפה – הקצב הגבוה, כמו קודם
+  const plain = [{ itag: 139, bitrate: 48000 }, { itag: 140, bitrate: 130000 }];
+  assert.strictEqual(ctx.dlPickAudio(plain).itag, 140);
 
   // ID3: תמונת שער (APIC) אחרי פריימי הטקסט
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 250, 251]);

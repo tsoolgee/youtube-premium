@@ -22,6 +22,19 @@ const CLEAN_TO_GROW = 4;   // חלקים רצופים בלי חיתוך לפני
 const LANES = 6;
 const RETRIES = 8;
 
+// לסרטון עם כמה פסי קול (הדיבוב האוטומטי של יוטיוב) יוטיוב מחזיר קבוצת פורמטים לכל שפה,
+// והדיבוב עלול להיות בקצב גבוה יותר – ואז הורדנו אותו במקום המקור. בוחרים לפי הסדר של yt-dlp:
+// פס שכתוב עליו "מקור"/"original", אחרת ברירת המחדל של יוטיוב, ורק בסוף הקצב הגבוה.
+function dlPickAudio(list) {
+  const best = arr => arr.slice().sort((a, b) => b.bitrate - a.bitrate)[0];
+  const tracked = list.filter(f => f.audioTrack);
+  if (!tracked.length) return best(list);
+  const original = tracked.filter(f => /original|מקור/i.test(f.audioTrack.displayName || ''));
+  if (original.length) return best(original);
+  const def = tracked.filter(f => f.audioTrack.audioIsDefault);
+  return best(def.length ? def : tracked);
+}
+
 async function fetchStreams(id, signal) {
   const headers = {
     'content-type': 'application/json',
@@ -58,9 +71,7 @@ async function fetchStreams(id, signal) {
 
   const formats = (data.streamingData?.adaptiveFormats || [])
     .filter(f => f.url && !f.isDrc && !/[?&]xtags=[^&]*drc/.test(f.url));
-  const audio = formats
-    .filter(f => f.mimeType.startsWith('audio/mp4'))
-    .sort((a, b) => b.bitrate - a.bitrate)[0];
+  const audio = dlPickAudio(formats.filter(f => f.mimeType.startsWith('audio/mp4')));
 
   const byLabel = new Map();
   for (const f of formats.filter(f => f.mimeType.startsWith('video/mp4'))) {
@@ -1009,7 +1020,8 @@ function dlLowerChoice(id, choice) {
 
 const dlOutOfMemory = e => !!e && (e.name === 'RangeError' || e.tooLarge);
 
-async function runDownload(id, choice) {
+// retried: כבר ניסינו עם קישורים חדשים – לא מנסים בלולאה
+async function runDownload(id, choice, retried) {
   let busy = null;
   try {
     await browserDownload(id, choice, b => { busy = b; });
@@ -1024,8 +1036,16 @@ async function runDownload(id, choice) {
         return runDownload(id, lower);
       }
     }
-    // קישור שפג (403) – בניסיון הבא מבקשים קישורים חדשים
-    if (e && e.expired && dlInfo.has(id)) { dlInfo.delete(id); dlInfoReady.delete(id); }
+    // קישור שפג (403): יוטיוב מחזיר קישורים לכמה שעות, אבל לפעמים הם נפסלים אחרי כמה דקות.
+    // מבקשים קישורים חדשים ומנסים שוב פעם אחת – במקום להראות "ההורדה נכשלה" על כלום.
+    if (e && e.expired) {
+      dlInfo.delete(id);
+      dlInfoReady.delete(id);
+      if (!retried) {
+        if (busy && dlBusy === busy) dlBusy = null;
+        return runDownload(id, choice, true);
+      }
+    }
     // "ההורדה נכשלה" כמו ביוטיוב; הסבר קצר רק כשיוטיוב נתן סיבה (סרטון פרטי וכו'), "האחסון מלא" כשאין זיכרון
     const full = e && (e.name === 'RangeError' || e.tooLarge);
     dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null });

@@ -447,6 +447,16 @@
   }
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // מחזיר את השליטה לדפדפן בלי setTimeout: בלשונית שברקע כרום מאט טיימרים (עד פעם בדקה
+  // אחרי כמה דקות), ולולאה שנשענת על sleep(0) פשוט נתקעת עד שחוזרים ללשונית.
+  // הודעות MessageChannel לא מואטות – ולכן ההמרה ממשיכה גם כשעובדים בחלון אחר.
+  const taskWaiters = [];
+  const taskChannel = typeof MessageChannel === 'function' ? new MessageChannel() : null;
+  if (taskChannel) taskChannel.port1.onmessage = () => { const r = taskWaiters.shift(); if (r) r(); };
+  const nextTask = () => (taskChannel
+    ? new Promise(res => { taskWaiters.push(res); taskChannel.port2.postMessage(0); })
+    : sleep(0));
   const onReady = fn => (document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
 
   function videoId() {
@@ -1965,7 +1975,7 @@
       const b = R ? enc.encodeBuffer(l, toI16(R.subarray(i, i + BLOCK))) : enc.encodeBuffer(l);
       if (b.length) out.push(new Uint8Array(b));
       onProgress(i / L.length);
-      await sleep(0); // מחזיר את השליטה לדפדפן – אחרת הדף קופא
+      await nextTask(); // מחזיר את השליטה לדפדפן – אחרת הדף קופא (וב-sleep הוא היה נתקע ברקע)
     }
     const tail = enc.flush();
     if (tail.length) out.push(new Uint8Array(tail));
@@ -1995,6 +2005,19 @@
   const CLEAN_TO_GROW = 4;   // חלקים רצופים בלי חיתוך לפני הגדלה
   const LANES = 6;
   const RETRIES = 8;
+
+  // לסרטון עם כמה פסי קול (הדיבוב האוטומטי של יוטיוב) יוטיוב מחזיר קבוצת פורמטים לכל שפה,
+  // והדיבוב עלול להיות בקצב גבוה יותר – ואז הורדנו אותו במקום המקור. בוחרים לפי הסדר של yt-dlp:
+  // פס שכתוב עליו "מקור"/"original", אחרת ברירת המחדל של יוטיוב, ורק בסוף הקצב הגבוה.
+  function dlPickAudio(list) {
+    const best = arr => arr.slice().sort((a, b) => b.bitrate - a.bitrate)[0];
+    const tracked = list.filter(f => f.audioTrack);
+    if (!tracked.length) return best(list);
+    const original = tracked.filter(f => /original|מקור/i.test(f.audioTrack.displayName || ''));
+    if (original.length) return best(original);
+    const def = tracked.filter(f => f.audioTrack.audioIsDefault);
+    return best(def.length ? def : tracked);
+  }
 
   async function fetchStreams(id, signal) {
     const headers = {
@@ -2032,9 +2055,7 @@
 
     const formats = (data.streamingData?.adaptiveFormats || [])
       .filter(f => f.url && !f.isDrc && !/[?&]xtags=[^&]*drc/.test(f.url));
-    const audio = formats
-      .filter(f => f.mimeType.startsWith('audio/mp4'))
-      .sort((a, b) => b.bitrate - a.bitrate)[0];
+    const audio = dlPickAudio(formats.filter(f => f.mimeType.startsWith('audio/mp4')));
 
     const byLabel = new Map();
     for (const f of formats.filter(f => f.mimeType.startsWith('video/mp4'))) {
@@ -2983,7 +3004,8 @@
 
   const dlOutOfMemory = e => !!e && (e.name === 'RangeError' || e.tooLarge);
 
-  async function runDownload(id, choice) {
+  // retried: כבר ניסינו עם קישורים חדשים – לא מנסים בלולאה
+  async function runDownload(id, choice, retried) {
     let busy = null;
     try {
       await browserDownload(id, choice, b => { busy = b; });
@@ -2998,8 +3020,16 @@
           return runDownload(id, lower);
         }
       }
-      // קישור שפג (403) – בניסיון הבא מבקשים קישורים חדשים
-      if (e && e.expired && dlInfo.has(id)) { dlInfo.delete(id); dlInfoReady.delete(id); }
+      // קישור שפג (403): יוטיוב מחזיר קישורים לכמה שעות, אבל לפעמים הם נפסלים אחרי כמה דקות.
+      // מבקשים קישורים חדשים ומנסים שוב פעם אחת – במקום להראות "ההורדה נכשלה" על כלום.
+      if (e && e.expired) {
+        dlInfo.delete(id);
+        dlInfoReady.delete(id);
+        if (!retried) {
+          if (busy && dlBusy === busy) dlBusy = null;
+          return runDownload(id, choice, true);
+        }
+      }
       // "ההורדה נכשלה" כמו ביוטיוב; הסבר קצר רק כשיוטיוב נתן סיבה (סרטון פרטי וכו'), "האחסון מלא" כשאין זיכרון
       const full = e && (e.name === 'RangeError' || e.tooLarge);
       dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null });

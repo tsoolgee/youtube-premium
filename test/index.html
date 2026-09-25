@@ -21,11 +21,20 @@ if (Q.get('msgs') !== '0') window.yt = { msgs_: Q.get('lang') === 'en'
 history.replaceState(null, '', '/test/index.html?v=jNQXAC9IVRw');
 const realFetch = window.fetch;
 
+// __expireGen: הקישורים שהתקבלו בבקשת הנגן ה-N מחזירים 403, כמו קישור שפג אצל יוטיוב
+let playerGen = 0;
 window.fetch = async (url, opts) => {
-  if (String(url).includes('/youtubei/v1/player')) {
+  const s = String(url);
+  if (window.__expireGen && /\/test\/[av]\./.test(s) && (window.__expireGen === '*' || s.includes('gen=' + window.__expireGen))) {
+    window.__expired = (window.__expired || 0) + 1;
+    return new Response('', { status: 403 });
+  }
+  if (s.includes('/youtubei/v1/player')) {
     window.__playerRequest = JSON.parse(opts.body);
+    window.__playerCalls = (window.__playerCalls || 0) + 1;
     if (window.__failPlayer) return new Response('blocked', { status: 418 });
-    const f = (itag, mime, len, extra) => ({ itag, url: location.origin + '/test/' + (mime.startsWith('audio') ? 'a.m4a' : 'v.mp4') + (window.__brokenStreams ? '-missing' : '') + '?x=1', mimeType: mime, contentLength: String(len), bitrate: itag, ...extra });
+    playerGen++;
+    const f = (itag, mime, len, extra) => ({ itag, url: location.origin + '/test/' + (mime.startsWith('audio') ? 'a.m4a' : 'v.mp4') + (window.__brokenStreams ? '-missing' : '') + '?x=1&gen=' + playerGen, mimeType: mime, contentLength: String(len), bitrate: itag, ...extra });
     return new Response(JSON.stringify({
       playabilityStatus: { status: 'OK' },
       adPlacements: [1], playerAds: [1],
@@ -47,7 +56,7 @@ window.fetch = async (url, opts) => {
   return realFetch(url, opts);
 };
 const attach = Element.prototype.attachShadow; Element.prototype.attachShadow = function (o) { return attach.call(this, { ...o, mode: 'open' }); };
-HTMLAnchorElement.prototype.click = function () { window.__saved = { name: this.download, href: this.href }; };
+HTMLAnchorElement.prototype.click = function () { window.__saved = { name: this.download, href: this.href, at: Date.now() }; };
 window.open = (u) => { window.__opened = u; return null; };
 </script>
 <script src="/userscript/youtube-premium.user.js"></script>
