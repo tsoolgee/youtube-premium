@@ -45,6 +45,8 @@ const TICK = [
 ];
 
 onReady(() => {
+  // החלון הקטן של ההורדות: רק ההורדה והרשימה שלה, בלי הפיצ'רים של דף יוטיוב
+  if (dlwIsWindow()) return dlwStartWindow();
   applySettings();
   setInterval(() => {
     for (const fn of TICK) {

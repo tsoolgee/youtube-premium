@@ -35,6 +35,9 @@ function dlPickAudio(list) {
   return best(def.length ? def : tracked);
 }
 
+// המקור של הדף, ואם אין כזה (about:blank וכדומה) – יוטיוב עצמו
+const ytOrigin = () => (/(^|\.)youtube\.com$/.test(location.hostname) ? location.origin : 'https://www.youtube.com');
+
 async function fetchStreams(id, signal) {
   const headers = {
     'content-type': 'application/json',
@@ -48,7 +51,7 @@ async function fetchStreams(id, signal) {
   const { headerId, ...client } = CLIENT;
   // הודעות השגיאה של יוטיוב (playabilityStatus.reason) בשפת הממשק
   const hl = typeof uiHebrew === 'function' && !uiHebrew() ? ((document.documentElement.lang || 'en').split('-')[0] || 'en') : 'he';
-  const r = await fetch(location.origin + '/youtubei/v1/player?prettyPrint=false', {
+  const r = await fetch(ytOrigin() + '/youtubei/v1/player?prettyPrint=false', {
     method: 'POST', credentials: 'omit', headers, signal,
     body: JSON.stringify({ context: { client: { ...client, hl } }, videoId: id, contentCheckOk: true, racyCheckOk: true }),
   });
@@ -996,6 +999,8 @@ async function startDownload(id, choice) {
   choice = dlNormChoice(choice) || '720';
   if ((dlBusy && dlBusy.id === id) || dlIsQueued(id)) return;
   dlFailed.delete(id);
+  // "הורדה בחלון נפרד": החלון שלנו מוריד במקומנו (download-window.js), ואפשר לסגור את הלשונית
+  if (typeof dlwHandOff === 'function' && dlwHandOff(id, choice)) return;
   if (!dlBusy && !dlQueue.length) { dlSession.total = 0; dlSession.done = 0; dlToastClosed = false; }
   dlSession.total++;
   if (dlBusy) {

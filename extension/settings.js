@@ -56,6 +56,8 @@ const SETTINGS = [
     ] },
   { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
     labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
+  { key: 'downloadWindow', type: 'bool', group: 'download', def: false, label: 'הורדה בחלון נפרד', desc: 'ההורדה עוברת לחלון קטן משלה – אפשר לסגור את הלשונית של הסרטון והיא ממשיכה. את החלון הקטן צריך להשאיר פתוח',
+    labelEn: 'Download in a separate window', descEn: 'The download moves to a small window of its own – you can close the video tab and it keeps going. That small window has to stay open' },
   { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
     labelEn: 'H.264 only (plays everywhere)', descEn: 'Hides qualities YouTube only offers in AV1 (usually 1440p and 4K) – the Windows player shows them as audio only without the AV1 extension' },
 ];

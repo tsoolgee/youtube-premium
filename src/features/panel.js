@@ -170,6 +170,8 @@ function toastLift() {
 // opts: { text, sub?, action?: { label, run }, close?: bool, progress?: number|null (0–100, רק בהורדה), ms?: 0 = עד שנסגר }
 // מחזיר { update(opts), hide() } – update מעדכן רק אם הטוסט עדיין שלנו
 function ytToast(opts) {
+  // בחלון ההורדה יש רשימה משלו – טוסט מעליה רק יסתיר אותה
+  if (typeof dlwIsWindow === 'function' && dlwIsWindow()) return null;
   ui();
   const el = shadow.querySelector('.toast');
   const token = ++toastToken;
