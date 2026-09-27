@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.0.91
+// @version      0.0.92
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -2281,6 +2281,7 @@
     downloads: () => ytMsg('DOWNLOADS', 'הורדות', 'Downloads'),
     yourDownloads: () => ytMsg('YOUR_DOWNLOADS', 'ההורדות שלך', 'Your downloads'),
     removeTitle: () => ytMsg('DELETE_FROM_DOWNLOADS', 'הסרה מההורדות', 'Remove from downloads'),
+    downloadAgain: () => ytMsg('DOWNLOAD_AGAIN', 'הורדה חוזרת', 'Download again'),
     delete: () => ytMsg('DELETE', 'מחיקה', 'Delete'),
   };
 
@@ -2866,8 +2867,15 @@
       ? [h('p', { class: 'dq-msg' }, ytMsg('REMOVE_DOWNLOAD_CONFIRMATION_TRACK_OFFLINE', 'הטראק לא יהיה זמין להאזנה במצב אופליין.', "This track won't be available to listen offline."))]
       : [];
     const okLabel = music ? ytMsg('REMOVE_DOWNLOAD_BUTTON', 'הסרה', 'Remove') : MSG.delete();
+    // סרטון שכבר ירד: חוץ מ"מחיקה" אפשר גם להוריד אותו שוב – בפורמט אחר או באותו אחד
+    const again = !music && dlIsDone(id) && !(dlBusy && dlBusy.id === id) && !dlIsQueued(id);
     const actions = [
       dlButton(MSG.cancel(), 'dq-cancel', () => dlg.close(false)),
+      again && dlButton(MSG.downloadAgain(), 'dq-again', () => {
+        dlg.close(true);
+        // תמיד שואלים איזו איכות, גם כשיש איכות קבועה בהגדרות – זו הנקודה של הורדה חוזרת
+        openQualityDialog(id, true);
+      }),
       dlButton(okLabel, 'dq-ok', () => {
         dlg.close(true);
         const busy = dlBusy && dlBusy.id === id ? dlBusy : null;
@@ -2877,7 +2885,7 @@
       }),
     ];
     dlg = ytDialog({
-      title, body, actions, className: 'dq-dialog dq-confirm',
+      title, body, actions: actions.filter(Boolean), className: 'dq-dialog dq-confirm',
       onClose: () => { if (dlDialog && dlDialog.back === dlg.back) dlDialog = null; },
     });
     dlDialog = { id, close: dlg.close, back: dlg.back };
