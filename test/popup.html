@@ -6,7 +6,7 @@ const Q = new URLSearchParams(location.search);
 const store = { settings: { downloadQuality: 'high' } };
 window.chrome = {
   i18n: { getUILanguage: () => (Q.get('lang') === 'en' ? 'en-US' : 'he') },
-  runtime: { getManifest: () => ({ version: '0.0.1' }), lastError: undefined },
+  runtime: { getManifest: () => ({ version: '0.0.92' }), lastError: undefined },
   tabs: { query: (q, cb) => cb([{ id: 1, url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }]), sendMessage: () => {} },
   storage: { local: { get: (k, cb) => { const r = { [k]: store[k] }; if (cb) setTimeout(() => cb(r), 0); return Promise.resolve(r); },
     set: o => { Object.assign(store, o); return Promise.resolve(); } }, onChanged: { addListener: () => {} } },
@@ -19,6 +19,6 @@ fetch('/extension/popup.html').then(r => r.text()).then(html => {
   document.documentElement.dir = doc.documentElement.dir;
   for (const n of [...doc.body.children]) if (n.tagName !== 'SCRIPT') document.body.append(n);
   const load = src => new Promise(res => { const s = document.createElement('script'); s.src = '/extension/' + src; s.onload = res; document.body.append(s); });
-  load('settings.js').then(() => load('popup.js')).then(() => { window.__popupReady = true; });
+  load('settings.js').then(() => load('update.js')).then(() => load('popup.js')).then(() => { window.__popupReady = true; });
 });
 </script></head><body></body></html>

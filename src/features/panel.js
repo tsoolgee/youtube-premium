@@ -290,6 +290,41 @@ function renderSettings(container) {
   return container;
 }
 
+// שורת הגרסה בהגדרות: "מעודכן" או "יש גרסה חדשה" עם קישור להתקנה (update.js)
+function versionLine() {
+  const line = h('div', { class: 'credit ytu-version' }, uiText('גרסה ', 'Version ') + YTU_VERSION);
+  if (S.updateCheck === false) return line;
+  const say = (text, href) => {
+    if (!line.isConnected) return;
+    fill(line, uiText('גרסה ', 'Version ') + YTU_VERSION + ' · ' + text,
+      href && ' ', href && h('a', { href, target: '_blank', rel: 'noopener' }, uiText('להורדה', 'Download')));
+  };
+  updateLatest(true).then(latest => {
+    if (!latest) return; // אין רשת או שהסינון חוסם – משאירים רק את מספר הגרסה
+    if (updateNewer(latest, YTU_VERSION)) say(uiText('יש גרסה חדשה: ', 'New version available: ') + latest, updateLink(Platform.kind));
+    else say(uiText('מעודכן', 'Up to date'));
+  }).catch(() => {});
+  return line;
+}
+
+// התרעה על גרסה חדשה: טוסט אחד לכל גרסה, בפעם הראשונה שנתקלים בה
+const UPDATE_SEEN = 'ytu-update-seen';
+async function updateNotice() {
+  if (S.updateCheck === false || (typeof dlwIsWindow === 'function' && dlwIsWindow())) return;
+  const latest = await updateLatest(false);
+  if (!latest || !updateNewer(latest, YTU_VERSION)) return;
+  try {
+    if (localStorage.getItem(UPDATE_SEEN) === latest) return;
+    localStorage.setItem(UPDATE_SEEN, latest);
+  } catch {}
+  const href = updateLink(Platform.kind);
+  ytToast({
+    text: uiText('יצאה גרסה חדשה של יוטיוב פרימיום: ', 'A new version of YouTube Premium is out: ') + latest,
+    action: { label: uiText('להורדה', 'Download'), run: () => window.open(href, '_blank', 'noopener') },
+    close: true, ms: 12000,
+  });
+}
+
 function creditLine() {
   return h('div', { class: 'credit' }, uiText('נוצר ע"י צול גאה · ', 'Made by Tsool Gaeh · '),
     h('a', { href: 'https://tsoolgee.uk', target: '_blank', rel: 'noopener' }, 'TSOOLGEE.UK'));
@@ -301,7 +336,7 @@ function openSettingsDialog() {
   if (Platform.kind === 'extension') return; // בתוסף – רק בחלון התוסף
   if (settingsDlg && settingsDlg.back.isConnected) return;
   const body = renderSettings(h('div', { class: 'settings' }));
-  body.append(creditLine());
+  body.append(versionLine(), creditLine());
   const done = h('button', { class: 'btn', onclick: () => settingsDlg && settingsDlg.close(true) }, uiText('סגירה', 'Close'));
   // כל הטקסטים כאן שלנו (עברית/אנגלית) – הכיוון לפי השפה שלהם
   settingsDlg = ytDialog({ title: SETTINGS_TITLE(), body, actions: [done], dir: uiHebrew() ? 'rtl' : 'ltr', onClose: () => { settingsDlg = null; } });
@@ -316,7 +351,7 @@ function refreshSettingsDialog() {
   if (!box || (active && box.contains(active) && active.matches('select'))) return;
   box.replaceChildren();
   renderSettings(box);
-  box.append(creditLine());
+  box.append(versionLine(), creditLine());
 }
 
 // ---------- נקודות כניסה מקוריות להגדרות (טמפרמונקי בלבד) ----------

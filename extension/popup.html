@@ -69,6 +69,9 @@
   select { flex: none; max-width: 160px; cursor: pointer; }
   select option { background: var(--raised2); }
 
+  .update { position: absolute; inset-inline-end: 16px; top: 42px; font-size: 11px; color: var(--blue); text-decoration: none; font-weight: 500; }
+  .update:hover { text-decoration: underline; }
+  header { position: relative; }
   footer.credit { padding: 12px 16px 14px; border-top: 1px solid var(--line); color: var(--text2); font-size: 12px; text-align: center; }
   footer.credit a { color: var(--blue); text-decoration: none; font-weight: 500; }
   footer.credit a:hover { text-decoration: underline; }
@@ -81,6 +84,7 @@
     <h1><span class="wm">YouTube</span><span class="tier">Premium</span></h1>
   </div>
   <small id="version"></small>
+  <a id="update" class="update" hidden target="_blank" rel="noopener"></a>
 </header>
 <main>
   <div class="hero">
@@ -95,6 +99,7 @@
 </main>
 <footer class="credit"><span id="credit-text">נוצר ע"י צול גאה · </span><a href="https://tsoolgee.uk" target="_blank" rel="noopener">TSOOLGEE.UK</a></footer>
 <script src="settings.js"></script>
+<script src="update.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

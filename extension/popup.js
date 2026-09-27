@@ -4,6 +4,20 @@ const $ = id => document.getElementById(id);
 const hint = $('hint');
 $('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
+// בדיקת עדכונים מול GitHub (update.js). בלי הורדה אוטומטית – רק קישור לדף הרילייס
+function showUpdate() {
+  const el = $('update');
+  if (!el) return;
+  el.hidden = true;
+  if (current && current.updateCheck === false) return;
+  updateLatest(true).then(latest => {
+    if (!latest || !updateNewer(latest, chrome.runtime.getManifest().version)) return;
+    el.textContent = t('יש גרסה חדשה: ' + latest, 'New version: ' + latest);
+    el.href = updateLink('extension');
+    el.hidden = false;
+  }).catch(() => {});
+}
+
 // שפה: עברית אם הדפדפן בעברית, אחרת אנגלית (עם labelEn/descEn מ-settings.js)
 const HE = /^(he|iw)/i.test((chrome.i18n && chrome.i18n.getUILanguage && chrome.i18n.getUILanguage()) || navigator.language || 'he');
 const t = (he, en) => (HE || !en ? he : en);
@@ -91,6 +105,7 @@ const withDefaults = saved => {
 chrome.storage.local.get('settings', r => {
   current = withDefaults(r.settings);
   renderSettings();
+  showUpdate();
 });
 
 // שינוי מדיאלוג ההגדרות שבדף בזמן שהחלון פתוח

@@ -4,6 +4,7 @@ const SETTING_GROUPS = [
   { id: 'ads', label: 'פרסומות', labelEn: 'Ads' },
   { id: 'watch', label: 'צפייה', labelEn: 'Playback' },
   { id: 'download', label: 'הורדות', labelEn: 'Downloads' },
+  { id: 'about', label: 'כללי', labelEn: 'General' },
 ];
 
 // labelEn / descEn: כשממשק יוטיוב לא בעברית
@@ -60,6 +61,9 @@ const SETTINGS = [
     labelEn: 'Download in a separate window', descEn: 'The download moves to a small window of its own – you can close the video tab and it keeps going. That small window has to stay open' },
   { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
     labelEn: 'H.264 only (plays everywhere)', descEn: 'Hides qualities YouTube only offers in AV1 (usually 1440p and 4K) – the Windows player shows them as audio only without the AV1 extension' },
+
+  { key: 'updateCheck', type: 'bool', group: 'about', def: true, label: 'בדיקת עדכונים', desc: 'בודק ב-GitHub אם יצאה גרסה חדשה ומראה על כך שורה כאן. אין הורדה אוטומטית',
+    labelEn: 'Check for updates', descEn: 'Checks GitHub for a newer version and shows a line here. Nothing is downloaded automatically' },
 ];
 
 const DEFAULTS = Object.fromEntries(SETTINGS.map(s => [s.key, s.def]));

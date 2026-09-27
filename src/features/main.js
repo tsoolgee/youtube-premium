@@ -54,4 +54,6 @@ onReady(() => {
     }
   }, 500);
   setInterval(keepAwake, 60 * 1000);
+  // התרעה על גרסה חדשה (update.js) – רגע אחרי הטעינה, כדי לא להתחרות בדף
+  setTimeout(() => { updateNotice().catch(() => {}); }, 5000);
 });

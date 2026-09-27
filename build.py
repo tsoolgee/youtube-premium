@@ -14,7 +14,7 @@ SRC = ROOT / "src"
 EXT = ROOT / "extension"
 
 # סדר הקבצים בחבילה שרצה בדף. כל הקבצים חולקים scope אחד (בתוך IIFE).
-CORE = ["settings.js"]
+CORE = ["settings.js", "update.js"]
 BUNDLE = [
     "mux.js",
     "features/util.js",
@@ -39,21 +39,23 @@ def read(name):
     return (SRC / name).read_text(encoding="utf-8").strip() + "\n"
 
 
-def bundle(platform):
-    body = "\n".join([read(name) for name in [*CORE, platform, *BUNDLE]])
+def bundle(platform, version=""):
+    # הגרסה נכנסת כקבוע לחבילה – ממנה נבנית שורת "יש גרסה חדשה" בהגדרות
+    head = 'const YTU_VERSION = "%s";\n' % version
+    body = head + "\n".join([read(name) for name in [*CORE, platform, *BUNDLE]])
     indented = "\n".join(("  " + line) if line else "" for line in body.splitlines())
     return f"(() => {{\n  'use strict';\n  if (window.__ytuLoaded) return;\n  window.__ytuLoaded = true;\n\n{indented}\n}})();\n"
 
 
-def build_extension():
+def build_extension(version=""):
     if EXT.exists():
         shutil.rmtree(EXT)
     EXT.mkdir()
-    for name in ["manifest.json", "settings.js", "bridge.js", "popup.html", "popup.js"]:
+    for name in ["manifest.json", "settings.js", "update.js", "bridge.js", "popup.html", "popup.js"]:
         shutil.copy(SRC / name, EXT / name)
     shutil.copytree(SRC / "icons", EXT / "icons")
     note = "// נוצר אוטומטית ע\"י build.py מתוך src/ – לא לערוך ישירות.\n"
-    (EXT / "main.js").write_text(note + bundle("platform-extension.js"), encoding="utf-8")
+    (EXT / "main.js").write_text(note + bundle("platform-extension.js", version), encoding="utf-8")
     return EXT
 
 
@@ -79,7 +81,7 @@ def build_userscript(version):
 """
     out = ROOT / "userscript" / "youtube-premium.user.js"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(header + bundle("platform-userscript.js"), encoding="utf-8")
+    out.write_text(header + bundle("platform-userscript.js", version), encoding="utf-8")
     return out
 
 
@@ -96,6 +98,6 @@ def build_zip():
 
 if __name__ == "__main__":
     version = json.loads(read("manifest.json"))["version"]
-    print(build_extension())
+    print(build_extension(version))
     print(build_userscript(version))
     print(build_zip())
