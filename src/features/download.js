@@ -1,16 +1,15 @@
 // ---------- 6. הורדה ----------
 
-// לקוח ה-visionOS מחזיר קישורים ישירים בלי חתימה מוצפנת ובלי PO token.
+// לקוחות visionOS מחזירים קישורים ישירים בלי חתימה מוצפנת, בלי n ובלי PO token – לפי הסדר, ועוברים לבא כשאחד נחסם.
+// בלי X-Goog-Visitor-Id יוטיוב עונה "Sign in to confirm you're not a bot".
+// 1.02 (מה ש-yt-dlp שולח) מחזיר קישורים שנכשלים בדפדפן – כנראה קשורים ל-User-Agent של ספארי, שאי אפשר לשלוח מדפדפן.
+// 0.1 עם המכשיר הישן מוריד את כל הקובץ (נבדק דרך נטפרי, 10/10/2026). iOS/Android 20 נותנים רק את המגה הראשון.
 // כשההורדה מפסיקה לעבוד – קודם כל לבדוק מה yt-dlp משתמש בו היום (INNERTUBE_CLIENTS).
-const CLIENT = {
-  clientName: 'VISIONOS',
-  clientVersion: '1.02',
-  deviceMake: 'Apple',
-  deviceModel: 'RealityDevice17,1',
-  osName: 'visionOS',
-  osVersion: '26.5.23O471',
-  headerId: '101',
-};
+const CLIENTS = [
+  { clientName: 'VISIONOS', clientVersion: '0.1', deviceMake: 'Apple', deviceModel: 'RealityDevice14,1', osName: 'visionOS', osVersion: '1.3.21O771', headerId: '101' },
+  { clientName: 'VISIONOS', clientVersion: '1.02', deviceMake: 'Apple', deviceModel: 'RealityDevice17,1', osName: 'visionOS', osVersion: '26.5.23O471', headerId: '101' },
+];
+let dlClientIndex = 0; // הלקוח האחרון שעבד – מתחילים ממנו בהורדה הבאה
 // חלקים קטנים: על חיבור מסונן (נטפרי) בקשות וידאו ארוכות נחתכות באקראי באמצע,
 // ואז יש פחות מה לחזור עליו. RETRIES = ניסיונות רצופים *בלי* התקדמות.
 // חלוקה מסתגלת: מתחילים גדול (פחות בקשות = מהר יותר), ומקטינים כשהחיבור חותך באמצע
@@ -38,7 +37,7 @@ function dlPickAudio(list) {
 // המקור של הדף, ואם אין כזה (about:blank וכדומה) – יוטיוב עצמו
 const ytOrigin = () => (/(^|\.)youtube\.com$/.test(location.hostname) ? location.origin : 'https://www.youtube.com');
 
-async function fetchStreams(id, signal) {
+async function dlPlayerRequest(CLIENT, id, signal) {
   const headers = {
     'content-type': 'application/json',
     'X-YouTube-Client-Name': CLIENT.headerId,
@@ -56,11 +55,14 @@ async function fetchStreams(id, signal) {
     body: JSON.stringify({ context: { client: { ...client, hl } }, videoId: id, contentCheckOk: true, racyCheckOk: true }),
   });
   if (!r.ok) {
+    // נטפרי מסמן "special-site" כשהוא חוסם את ההורדה עצמה (לקוח שמחזיר קישורים ישירים), גם כשהסרטון פתוח לצפייה
+    const blockedSite = r.status === 418 && /special-site/.test(await r.text().catch(() => ''));
     const err = new Error(r.status === 418
-      ? dlT(DL_ERRORS.BLOCKED_418[0], DL_ERRORS.BLOCKED_418[1])
+      ? dlT(...DL_ERRORS[blockedSite ? 'BLOCKED_DOWNLOADS' : 'BLOCKED_418'])
       : dlT('יוטיוב החזיר שגיאה ', 'YouTube returned an error ') + r.status);
     // חסימה של הסינון (נטפרי ודומיו מחזירים 418) – מציגים את הסיבה מתחת ל"ההורדה נכשלה"
     if (r.status === 418) err.ytReason = true;
+    err.filtered = r.status === 418;
     throw err;
   }
   const data = await r.json();
@@ -71,6 +73,29 @@ async function fetchStreams(id, signal) {
     if (status.reason) err.ytReason = true;
     throw err;
   }
+  if (!(data.streamingData?.adaptiveFormats || []).some(f => f.url)) {
+    throw new Error(dlT('יוטיוב לא החזיר קישורים שאפשר להוריד לסרטון הזה', "YouTube didn't return downloadable links for this video"));
+  }
+  return data;
+}
+
+async function fetchStreams(id, signal) {
+  // מנסים את הלקוחות לפי הסדר, החל מזה שעבד בפעם הקודמת. אם כולם נכשלו – ההסבר של יוטיוב (פרטי, מוגבל...)
+  // עדיף, אחריו חסימת הסינון, ורק בסוף שגיאה כללית.
+  let data, ytErr, blockErr, otherErr;
+  for (let k = 0; k < CLIENTS.length && !data; k++) {
+    const i = (dlClientIndex + k) % CLIENTS.length;
+    try {
+      data = await dlPlayerRequest(CLIENTS[i], id, signal);
+      dlClientIndex = i;
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      if (e.filtered) blockErr = blockErr || e;
+      else if (e.ytReason) ytErr = ytErr || e;
+      else otherErr = otherErr || e;
+    }
+  }
+  if (!data) throw ytErr || blockErr || otherErr;
 
   const formats = (data.streamingData?.adaptiveFormats || [])
     .filter(f => f.url && !f.isDrc && !/[?&]xtags=[^&]*drc/.test(f.url));
@@ -998,6 +1023,7 @@ function dlFail(busy, id, choice, endToast) {
 
 const DL_ERRORS = {
   BLOCKED_418: ['הבקשה נחסמה (ייתכן שהסינון חוסם את הסרטון)', 'The request was blocked (a content filter may be blocking this video)'],
+  BLOCKED_DOWNLOADS: ['הסינון חוסם הורדות מיוטיוב (הצפייה בסרטון לא נחסמה)', 'Your content filter blocks YouTube downloads (watching is still allowed)'],
 };
 
 // ---------- ההורדה ----------

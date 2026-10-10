@@ -101,7 +101,7 @@ async def launch(p, mobile=False):
             "--autoplay-policy=no-user-gesture-required"]
     if not A.headed:
         args.append("--headless=new")
-    opts = dict(headless=False, executable_path=EDGE, proxy={"server": A.proxy},
+    opts = dict(headless=False, executable_path=EDGE, **({} if A.proxy == "none" else {"proxy": {"server": A.proxy}}),
                 ignore_default_args=["--disable-extensions", "--disable-component-extensions-with-background-pages"],
                 args=args, accept_downloads=True, color_scheme="dark" if A.dark else "light", locale=A.lang)
     if mobile:
@@ -161,7 +161,7 @@ async def www_download(page):
     await asyncio.sleep(2)
     step("row-before", row=await page.evaluate(ROW_JS))
     await shot(page, "1-before")
-    await page.locator("ytd-watch-metadata ytd-download-button-renderer button").first.click()
+    await page.evaluate("() => document.querySelector('ytd-watch-metadata ytd-download-button-renderer button').click()")
     await asyncio.sleep(3)
     step("dialog", texts=await page.evaluate(SHADOW_TEXT_JS),
          checked=await page.evaluate("() => { const r=[document];for(let i=0;i<r.length;i++)for(const e of r[i].querySelectorAll('*'))if(e.shadowRoot)r.push(e.shadowRoot); for (const x of r) { const d = x.querySelector('.dq-dialog'); if (d) return { checked: [...d.querySelectorAll('input:checked')].map(i => i.value), okDisabled: d.querySelector('.dq-ok').disabled }; } }"))
