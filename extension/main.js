@@ -4,7 +4,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.0.93";
+  const YTU_VERSION = "0.0.94";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -64,6 +64,8 @@
       ] },
     { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
       labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
+    { key: 'useAccount', type: 'bool', group: 'download', def: true, label: 'הורדה עם החשבון שלך', desc: 'סרטון עם הגבלת גיל, פרטי או למנויי ערוץ נכשל בהורדה "אנונימית" – ואז התוסף מבקש אותו שוב מיוטיוב עם החשבון שמחובר בדפדפן. בטמפרמונקי לא פעיל',
+      labelEn: 'Download with your account', descEn: 'Age-restricted, private or members-only videos fail as an anonymous request – the extension then asks YouTube again as the account signed in to the browser. Not used in Tampermonkey' },
     { key: 'downloadWindow', type: 'bool', group: 'download', def: false, label: 'הורדה בחלון נפרד', desc: 'ההורדה עוברת לחלון קטן משלה – אפשר לסגור את הלשונית של הסרטון והיא ממשיכה. את החלון הקטן צריך להשאיר פתוח',
       labelEn: 'Download in a separate window', descEn: 'The download moves to a small window of its own – you can close the video tab and it keeps going. That small window has to stay open' },
     { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
@@ -2075,7 +2077,26 @@
   // המקור של הדף, ואם אין כזה (about:blank וכדומה) – יוטיוב עצמו
   const ytOrigin = () => (/(^|\.)youtube\.com$/.test(location.hostname) ? location.origin : 'https://www.youtube.com');
 
-  async function dlPlayerRequest(CLIENT, id, signal) {
+  // הכותרת Authorization של גוגל (SAPISIDHASH) – יוטיוב עצמו מחשב אותה בדפדפן מהעוגייה SAPISID.
+  // בלעדיה הבקשה היא "לא מחובר", וסרטון עם הגבלת גיל / פרטי / למנויי ערוץ נכשל גם כשלמשתמש יש גישה.
+  async function dlAuthHeaders() {
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)(?:SAPISID|__Secure-3PAPISID)=([^;]+)/);
+      if (!m || !crypto?.subtle) return null;
+      const origin = ytOrigin();
+      const ts = Math.floor(Date.now() / 1000);
+      const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ts + ' ' + m[1] + ' ' + origin));
+      const sum = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+      return { Authorization: 'SAPISIDHASH ' + ts + '_' + sum, 'X-Origin': origin, 'X-Goog-AuthUser': '0' };
+    } catch { return null; }
+  }
+
+  // החשבון נכנס לתמונה רק בתוסף (שם הוא "הגרסה המלאה"), רק בדפי יוטיוב ורק אם ההגדרה דלוקה
+  const dlAccountOn = () => Platform.kind === 'extension' && S.useAccount !== false
+    && /(^|\.)youtube\.com$/.test(location.hostname);
+
+  // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר
+  async function dlPlayerRequest(CLIENT, id, signal, auth) {
     const headers = {
       'content-type': 'application/json',
       'X-YouTube-Client-Name': CLIENT.headerId,
@@ -2088,8 +2109,13 @@
     const { headerId, ...client } = CLIENT;
     // הודעות השגיאה של יוטיוב (playabilityStatus.reason) בשפת הממשק
     const hl = typeof uiHebrew === 'function' && !uiHebrew() ? ((document.documentElement.lang || 'en').split('-')[0] || 'en') : 'he';
+    if (auth) {
+      const extra = await dlAuthHeaders();
+      if (!extra) return null; // אין עוגייה של חשבון מחובר – אין מה לנסות
+      Object.assign(headers, extra);
+    }
     const r = await fetch(ytOrigin() + '/youtubei/v1/player?prettyPrint=false', {
-      method: 'POST', credentials: 'omit', headers, signal,
+      method: 'POST', credentials: auth ? 'include' : 'omit', headers, signal,
       body: JSON.stringify({ context: { client: { ...client, hl } }, videoId: id, contentCheckOk: true, racyCheckOk: true }),
     });
     if (!r.ok) {
@@ -2117,23 +2143,30 @@
     return data;
   }
 
-  async function fetchStreams(id, signal) {
-    // מנסים את הלקוחות לפי הסדר, החל מזה שעבד בפעם הקודמת. אם כולם נכשלו – ההסבר של יוטיוב (פרטי, מוגבל...)
-    // עדיף, אחריו חסימת הסינון, ורק בסוף שגיאה כללית.
-    let data, ytErr, blockErr, otherErr;
-    for (let k = 0; k < CLIENTS.length && !data; k++) {
+  // עובר על הלקוחות לפי הסדר, החל מזה שעבד בפעם הקודמת, ומחזיר את התשובה הראשונה שהצליחה
+  async function dlTryClients(id, signal, auth, errs) {
+    for (let k = 0; k < CLIENTS.length; k++) {
       const i = (dlClientIndex + k) % CLIENTS.length;
       try {
-        data = await dlPlayerRequest(CLIENTS[i], id, signal);
-        dlClientIndex = i;
+        const data = await dlPlayerRequest(CLIENTS[i], id, signal, auth);
+        if (data) { dlClientIndex = i; return data; }
       } catch (e) {
         if (signal?.aborted) throw e;
-        if (e.filtered) blockErr = blockErr || e;
-        else if (e.ytReason) ytErr = ytErr || e;
-        else otherErr = otherErr || e;
+        if (e.filtered) errs.block = errs.block || e;
+        else if (e.ytReason) errs.yt = errs.yt || e;
+        else errs.other = errs.other || e;
       }
     }
-    if (!data) throw ytErr || blockErr || otherErr;
+    return null;
+  }
+
+  async function fetchStreams(id, signal) {
+    // אם כולם נכשלו – ההסבר של יוטיוב (פרטי, מוגבל...) עדיף, אחריו חסימת הסינון, ורק בסוף שגיאה כללית.
+    const errs = {};
+    let data = await dlTryClients(id, signal, false, errs);
+    // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
+    if (!data && dlAccountOn()) data = await dlTryClients(id, signal, true, errs);
+    if (!data) throw errs.yt || errs.block || errs.other;
 
     const formats = (data.streamingData?.adaptiveFormats || [])
       .filter(f => f.url && !f.isDrc && !/[?&]xtags=[^&]*drc/.test(f.url));

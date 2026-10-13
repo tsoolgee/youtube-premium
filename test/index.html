@@ -32,6 +32,14 @@ window.fetch = async (url, opts) => {
   if (s.includes('/youtubei/v1/player')) {
     window.__playerRequest = JSON.parse(opts.body);
     window.__playerCalls = (window.__playerCalls || 0) + 1;
+    // __needAuth: הסרטון דורש חשבון – בלי כותרת Authorization מקבלים סירוב, כמו בהגבלת גיל
+    const auth = (opts.headers || {}).Authorization || '';
+    window.__authSeen = window.__authSeen || [];
+    window.__authSeen.push(auth ? auth.slice(0, 13) + '/' + (opts.credentials || '') : 'none/' + (opts.credentials || ''));
+    if (window.__needAuth && !auth) {
+      return new Response(JSON.stringify({ playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להתחבר כדי לצפות בסרטון הזה' } }),
+        { headers: { 'content-type': 'application/json' } });
+    }
     if (window.__failPlayer) return new Response('blocked', { status: 418 });
     playerGen++;
     const f = (itag, mime, len, extra) => ({ itag, url: location.origin + '/test/' + (mime.startsWith('audio') ? 'a.m4a' : 'v.mp4') + (window.__brokenStreams ? '-missing' : '') + '?x=1&gen=' + playerGen, mimeType: mime, contentLength: String(len), bitrate: itag, ...extra });

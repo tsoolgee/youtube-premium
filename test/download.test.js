@@ -13,12 +13,13 @@ const ctx = {
   localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
   window: { addEventListener: noop, removeEventListener: noop, yt: { msgs_: { TRANSFER_FAILED: 'ההורדה נכשלה', VIDEO_COUNT: { case1: 'סרטון אחד', other: '‫# סרטונים' }, DOWNLOADING_PERCENT: 'רגע, תכף נסיים להוריד... $percent%' } } },
   document: { documentElement: { lang: 'he' }, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, title: '' },
-  location: { pathname: '/watch' },
+  location: { pathname: '/watch', hostname: 'www.youtube.com', origin: 'https://www.youtube.com' },
+  crypto: require('crypto').webcrypto, TextEncoder, Platform: { kind: 'extension' },
   videoId: () => null, player: () => null, h: () => ({}), mb: n => n + 'B', safeName: x => x,
   uiText: he => he, uiHebrew: () => true,
 };
 vm.createContext(ctx);
-vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlPickAudio, dlInfoReady, dlSizeText, mp3Cover, mp3CoverUrls });', ctx);
+vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCountText, dlPageItem, MSG, dlRemoveNow, dlDoneList, dlRestoreDone, dlSetDone, DL_DONE_KEY, DL_CHOICES, dlIsAudio, id3, lamejs, toMp3, mp3Kbps, dlChoices, dlLowerChoice, dlPickVideo, dlPickAudio, dlInfoReady, dlSizeText, mp3Cover, mp3CoverUrls, fetchStreams });', ctx);
 
 (async () => {
   // מדרגות הטבעת כמו updateProgress של יוטיוב
@@ -214,6 +215,36 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
     ['L', 's', 'https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg']);
   // אין תמונה ואין מזהה – יורד בלי שער, בלי לזרוק
   assert.strictEqual(await ctx.mp3Cover({}), null);
+
+  // סרטון שדורש חשבון: ניסיון ראשון בלי עוגיות נכשל, והשני נשלח עם Authorization של החשבון
+  const authCalls = [];
+  const stream = { itag: 140, url: 'https://x/a', mimeType: 'audio/mp4; codecs="mp4a.40.2"', contentLength: '1', bitrate: 1 };
+  ctx.document.cookie = 'YSC=1; SAPISID=secret-value; PREF=x';
+  ctx.fetch = async (url, opts) => {
+    const auth = (opts.headers || {}).Authorization || '';
+    authCalls.push({ auth: auth.split(' ')[0] || 'none', creds: opts.credentials });
+    const body = auth
+      ? { playabilityStatus: { status: 'OK' }, videoDetails: { title: 't', lengthSeconds: '10' }, streamingData: { adaptiveFormats: [stream] } }
+      : { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להתחבר' } };
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+  };
+  const authInfo = await ctx.fetchStreams('abcdefghijk');
+  assert.strictEqual(authInfo.audio.itag, 140, 'הסרטון ירד בניסיון עם החשבון');
+  assert(authCalls.length >= 2, 'היה ניסיון שני: ' + JSON.stringify(authCalls));
+  assert.deepStrictEqual(authCalls[0], { auth: 'none', creds: 'omit' }, 'הניסיון הראשון בלי חשבון');
+  const withAuth = authCalls.find(c => c.auth === 'SAPISIDHASH');
+  assert(withAuth, 'נשלחה כותרת SAPISIDHASH: ' + JSON.stringify(authCalls));
+  assert.strictEqual(withAuth.creds, 'include', 'עם העוגיות של הדפדפן');
+
+  // בטמפרמונקי אין ניסיון עם חשבון, וגם לא כשההגדרה כבויה
+  for (const [who, patch] of [['userscript', { Platform: { kind: 'userscript' } }], ['off', { S: { ...ctx.S, useAccount: false } }]]) {
+    authCalls.length = 0;
+    const back = { Platform: ctx.Platform, S: ctx.S };
+    Object.assign(ctx, patch);
+    await ctx.fetchStreams('abcdefghijk').then(() => assert.fail('היה צריך להיכשל: ' + who), () => {});
+    assert(authCalls.every(c => c.auth === 'none'), who + ': בלי חשבון');
+    Object.assign(ctx, back);
+  }
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });
