@@ -4,7 +4,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.1.1";
+  const YTU_VERSION = "0.1.2";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -2222,9 +2222,11 @@
     const { headerId, ...client } = CLIENT;
     // הודעות השגיאה של יוטיוב (playabilityStatus.reason) בשפת הממשק
     const hl = typeof uiHebrew === 'function' && !uiHebrew() ? ((document.documentElement.lang || 'en').split('-')[0] || 'en') : 'he';
-    if (auth) {
+    // auth === 'cookies': רק העוגיות של הדפדפן. auth === true: גם כותרת ההרשאה של גוגל,
+    // אם העוגייה שממנה היא מחושבת בכלל נגישה לסקריפט (לא תמיד).
+    if (auth === true) {
       const extra = await dlAuthHeaders();
-      if (!extra) return null; // אין עוגייה של חשבון מחובר – אין מה לנסות
+      if (!extra) return null;
       Object.assign(headers, extra);
     }
     const r = await fetch(ytOrigin() + '/youtubei/v1/player?prettyPrint=false', {
@@ -2286,6 +2288,7 @@
     // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
     // לא בודקים כאן אם "מחוברים": זיהוי כזה עלול לטעות, ובקשה אחת עם העוגיות שיש היא זולה.
     // כשאין בכלל עוגיות מתאימות dlPlayerRequest מוותר מיד.
+    if (!data && dlAccountOn()) data = await dlTryClients(id, signal, 'cookies', errs);
     if (!data && dlAccountOn()) data = await dlTryClients(id, signal, true, errs);
     // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה בדרך כלל במזהה המבקר של הדף (בעיקר כשהדפדפן
     // מחובר לחשבון אבל הבקשה שלנו אנונימית) – הניסיון האחרון הוא בלעדיו לגמרי
