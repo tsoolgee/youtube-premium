@@ -912,8 +912,8 @@ function openDownloadDialog(anchor, id) {
 
   // בזמן הורדה / בתור / אחרי הורדה: ACTION_REMOVE_WITH_PROMPT. הורדה אחרת רצה – נכנסים לתור, כמו ב-Premium
   if ((dlBusy && dlBusy.id === id) || dlIsQueued(id) || dlIsDone(id)) return openRemoveDialog(id);
-  // "ניסיון חוזר" (ACTION_RETRY): אותה בחירה בלי לשאול שוב
-  if (dlFailed.has(id)) return startDownload(id, dlFailed.get(id));
+  // אחרי כישלון: פותחים את חלון האיכות כרגיל (ה"ניסיון חוזר" יושב על הודעת השגיאה)
+  dlFailed.delete(id);
 
   // YouTube Music: אין דיאלוג רזולוציה לשירים – האיכות היא הגדרה של Music, והטראק יורד כשמע
   if (SITE === 'music') return startDownload(id, 'audio');
@@ -996,6 +996,18 @@ function openRemoveDialog(id) {
   actions[0].focus();
 }
 
+// האיכות שמתנגנת עכשיו בנגן, מתוך האפשרויות שבדיאלוג – היא ברירת המחדל המסומנת
+function dlPlayingChoice(choices) {
+  const v = mainVideo() || video();
+  const height = v && v.videoHeight;
+  const list = (choices || []).filter(c => c.height);
+  if (!height || !list.length) return null;
+  const exact = list.find(c => c.height === height);
+  if (exact) return exact.value;
+  const lower = list.filter(c => c.height <= height).sort((a, b) => b.height - a.height)[0];
+  return (lower || list[list.length - 1]).value;
+}
+
 function openQualityDialog(id, again) {
   if (isDownloadViewOpen(id) && !again) return;
   closeDownloadDialog();
@@ -1014,7 +1026,11 @@ function openQualityDialog(id, again) {
   }, MSG.download());
   // כמו ytd-settings-radio-option-renderer: #start (רדיו + שם) ו-#end (גודל)
   const last = dlLastChoice();
-  const makeRows = choices => choices.map(c => {
+  const makeRows = choices => {
+    // מסומן מראש מה שמתנגן בפועל, ואם אי אפשר לדעת – הבחירה האחרונה
+    const want = dlPlayingChoice(choices) || last;
+    if (want && choices.some(c => c.value === want)) { chosen = want; okBtn.disabled = false; }
+    return choices.map(c => {
     const radio = h('input', { type: 'radio', class: 'dq-radio', name: 'ytu-dl-quality', value: c.value,
       onchange: () => { chosen = c.value; okBtn.disabled = false; } });
     if (c.value === last) radio.setAttribute('data-last', '');
@@ -1024,7 +1040,8 @@ function openQualityDialog(id, again) {
     return h('label', { class: 'dq-row', 'data-choice': c.value },
       h('div', { class: 'dq-start' }, radio, h('div', { class: 'dq-label' }, dlT(c.he, c.en))),
       h('div', { class: 'dq-end' }, aside));
-  });
+    });
+  };
   const list = h('div', { class: 'dq-list', role: 'radiogroup' }, makeRows(DL_CHOICES));
   const remember = h('input', { type: 'checkbox', class: 'dq-check' });
   const body = h('div', { class: 'dq' }, list,
@@ -1092,10 +1109,12 @@ function dlFinish(busy, endToast, cancelled) {
   else { dlSession.total = 0; dlSession.done = 0; dlToastClosed = false; }
 }
 
-// כישלון: הכפתור עובר ל"ניסיון חוזר" עם הבחירה האחרונה
+// כישלון: "ניסיון חוזר" הוא כפתור על ההודעה עצמה (אותה בחירה, בלי לשאול שוב),
+// והלחיצה על הכפתור שבדף פותחת את חלון האיכות הרגיל כדי לבחור משהו אחר
 function dlFail(busy, id, choice, endToast) {
   if (id) dlFailed.set(id, choice);
-  dlFinish(busy, { ...endToast, error: true });
+  const action = id ? { label: MSG.retry(), run: () => startDownload(id, choice) } : null;
+  dlFinish(busy, { ...endToast, action: action || endToast.action, error: true });
 }
 
 // ---------- הודעות שגיאה בשפת הממשק ----------
