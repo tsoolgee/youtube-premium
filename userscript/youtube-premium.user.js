@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.0.96
+// @version      0.0.97
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -21,7 +21,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.0.96";
+  const YTU_VERSION = "0.0.97";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -81,8 +81,8 @@
       ] },
     { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
       labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
-    { key: 'useAccount', type: 'bool', group: 'download', def: true, label: 'הורדה עם החשבון שלך', desc: 'סרטון עם הגבלת גיל, פרטי או למנויי ערוץ נכשל בהורדה "אנונימית" – ואז הבקשה נשלחת שוב ליוטיוב עם החשבון שמחובר בדפדפן',
-      labelEn: 'Download with your account', descEn: 'Age-restricted, private or members-only videos fail as an anonymous request – the request is then repeated as the account signed in to the browser' },
+    { key: 'useAccount', type: 'bool', group: 'download', def: false, label: 'הורדה עם החשבון שלך', desc: 'סרטון עם הגבלת גיל, פרטי או למנויי ערוץ נכשל בהורדה "אנונימית" – ואז הבקשה נשלחת שוב ליוטיוב עם החשבון שמחובר בדפדפן. כבוי כברירת מחדל: יוטיוב מגיב לפעמים לבקשה כזו ב"צריך להיכנס כדי לאמת שלא מדובר בבוט"',
+      labelEn: 'Download with your account', descEn: 'Age-restricted, private or members-only videos fail as an anonymous request – the request is then repeated as the account signed in to the browser. Off by default: YouTube sometimes answers such a request with "Sign in to confirm you are not a bot"' },
     { key: 'downloadWindow', type: 'bool', group: 'download', def: false, label: 'הורדה בחלון נפרד', desc: 'ההורדה עוברת לחלון קטן משלה – אפשר לסגור את הלשונית של הסרטון והיא ממשיכה. את החלון הקטן צריך להשאיר פתוח',
       labelEn: 'Download in a separate window', descEn: 'The download moves to a small window of its own – you can close the video tab and it keeps going. That small window has to stay open' },
     { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
@@ -2208,8 +2208,9 @@
     let data = await dlTryClients(id, signal, false, errs);
     // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
     if (!data && dlAccountOn() && dlSignedIn()) data = await dlTryClients(id, signal, true, errs);
-    // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה לפעמים במזהה המבקר של הדף – שווה ניסיון בלעדיו
-    if (!data && errs.yt && errs.yt.needsLogin) data = await dlTryClients(id, signal, false, errs, true);
+    // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה בדרך כלל במזהה המבקר של הדף (בעיקר כשהדפדפן
+    // מחובר לחשבון אבל הבקשה שלנו אנונימית) – הניסיון האחרון הוא בלעדיו לגמרי
+    if (!data && errs.yt) data = await dlTryClients(id, signal, false, errs, true);
     if (!data) throw errs.yt || errs.block || errs.other;
 
     const formats = (data.streamingData?.adaptiveFormats || [])

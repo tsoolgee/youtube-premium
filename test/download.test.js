@@ -219,6 +219,7 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   // סרטון שדורש חשבון: ניסיון ראשון בלי עוגיות נכשל, והשני נשלח עם Authorization של החשבון
   const authCalls = [];
   const stream = { itag: 140, url: 'https://x/a', mimeType: 'audio/mp4; codecs="mp4a.40.2"', contentLength: '1', bitrate: 1 };
+  ctx.S.useAccount = true; // כבוי כברירת מחדל – כאן בודקים את המסלול עצמו
   ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; SAPISID=secret-value; PREF=x';
   ctx.fetch = async (url, opts) => {
     const auth = (opts.headers || {}).Authorization || '';

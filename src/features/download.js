@@ -154,8 +154,9 @@ async function fetchStreams(id, signal) {
   let data = await dlTryClients(id, signal, false, errs);
   // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
   if (!data && dlAccountOn() && dlSignedIn()) data = await dlTryClients(id, signal, true, errs);
-  // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה לפעמים במזהה המבקר של הדף – שווה ניסיון בלעדיו
-  if (!data && errs.yt && errs.yt.needsLogin) data = await dlTryClients(id, signal, false, errs, true);
+  // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה בדרך כלל במזהה המבקר של הדף (בעיקר כשהדפדפן
+  // מחובר לחשבון אבל הבקשה שלנו אנונימית) – הניסיון האחרון הוא בלעדיו לגמרי
+  if (!data && errs.yt) data = await dlTryClients(id, signal, false, errs, true);
   if (!data) throw errs.yt || errs.block || errs.other;
 
   const formats = (data.streamingData?.adaptiveFormats || [])
