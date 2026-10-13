@@ -221,7 +221,7 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   const stream = { itag: 140, url: 'https://x/a', mimeType: 'audio/mp4; codecs="mp4a.40.2"', contentLength: '1', bitrate: 1 };
   ctx.S.useAccount = true; // כבוי כברירת מחדל – כאן בודקים את המסלול עצמו
   ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; SAPISID=secret-value; PREF=x';
-  ctx.fetch = async (url, opts) => {
+  const okFetch = async (url, opts) => {
     const auth = (opts.headers || {}).Authorization || '';
     authCalls.push({ auth: auth.split(' ')[0] || 'none', creds: opts.credentials });
     const body = auth
@@ -229,6 +229,7 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
       : { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להתחבר' } };
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
   };
+  ctx.fetch = okFetch;
   const authInfo = await ctx.fetchStreams('abcdefghijk');
   assert.strictEqual(authInfo.audio.itag, 140, 'הסרטון ירד בניסיון עם החשבון');
   assert(authCalls.length >= 2, 'היה ניסיון שני: ' + JSON.stringify(authCalls));
@@ -242,14 +243,18 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   ctx.Platform = { kind: 'userscript' };
   await ctx.fetchStreams('abcdefghijk');
   assert(authCalls.some(c => c.auth === 'SAPISIDHASH'), 'גם הטמפרמונקי מנסה עם החשבון');
-  // בלי חשבון מחובר בדפדפן אין בכלל ניסיון עם עוגיות, וההודעה אומרת למשתמש מה לעשות
+  // בלי סשן יוטיוב עדיין מנסים (העוגיות קיימות), אבל ההודעה אומרת למשתמש מה לעשות
   authCalls.length = 0;
   const signedCookie = ctx.document.cookie;
   ctx.document.cookie = 'YSC=1; __Secure-3PAPISID=third-party-value';
+  ctx.fetch = async () => {
+    const body = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להיכנס כדי לאמת שלא מדובר בבוט' } };
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+  };
   const noLogin = await ctx.fetchStreams('abcdefghijk').then(() => null, e => e);
-  assert(authCalls.every(c => c.auth === 'none'), 'בלי LOGIN_INFO לא שולחים עוגיות');
   assert(/מחובר לחשבון יוטיוב/.test(noLogin.message), 'ההודעה מכוונת להתחברות: ' + noLogin.message);
   ctx.document.cookie = signedCookie;
+  ctx.fetch = okFetch;
 
   authCalls.length = 0;
   const savedS = ctx.S;

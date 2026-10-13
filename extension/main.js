@@ -4,7 +4,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.0.98";
+  const YTU_VERSION = "0.0.99";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -2114,7 +2114,17 @@
   // רק בדפי יוטיוב (שם יש עוגיות של החשבון) ורק אם ההגדרה דלוקה – בתוסף ובטמפרמונקי כאחד
   const dlAccountOn = () => S.useAccount !== false && /(^|\.)youtube\.com$/.test(location.hostname);
 
-  const dlSignedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('LOGIN_INFO='));
+  // האם יש סשן יוטיוב בדפדפן. עוגיית LOGIN_INFO לא תמיד נגישה ל-JS, ולכן קודם כל הדגל של
+  // יוטיוב עצמו (ytcfg.LOGGED_IN), ואחריו מה שהדף סיפר ורק בסוף העוגייה.
+  function dlSignedIn() {
+    try {
+      const flag = window.ytcfg?.get?.('LOGGED_IN');
+      if (typeof flag === 'boolean') return flag;
+      const out = window.ytInitialData?.responseContext?.mainAppWebResponseContext?.loggedOut;
+      if (typeof out === 'boolean') return !out;
+    } catch {}
+    return document.cookie.split(';').some(c => c.trim().startsWith('LOGIN_INFO='));
+  }
 
   // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר.
   // noVisitor: בלי מזהה המבקר של הדף – לפעמים הוא עצמו זה שמסומן כ"בוט"
@@ -2193,7 +2203,9 @@
     const errs = {};
     let data = await dlTryClients(id, signal, false, errs);
     // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
-    if (!data && dlAccountOn() && dlSignedIn()) data = await dlTryClients(id, signal, true, errs);
+    // לא בודקים כאן אם "מחוברים": זיהוי כזה עלול לטעות, ובקשה אחת עם העוגיות שיש היא זולה.
+    // כשאין בכלל עוגיות מתאימות dlPlayerRequest מוותר מיד.
+    if (!data && dlAccountOn()) data = await dlTryClients(id, signal, true, errs);
     // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה בדרך כלל במזהה המבקר של הדף (בעיקר כשהדפדפן
     // מחובר לחשבון אבל הבקשה שלנו אנונימית) – הניסיון האחרון הוא בלעדיו לגמרי
     if (!data && errs.yt) data = await dlTryClients(id, signal, false, errs, true);
