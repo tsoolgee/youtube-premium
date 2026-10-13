@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.1.2
+// @version      0.1.21
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -21,7 +21,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.1.2";
+  const YTU_VERSION = "0.1.21";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -2174,38 +2174,6 @@
   // המקור של הדף, ואם אין כזה (about:blank וכדומה) – יוטיוב עצמו
   const ytOrigin = () => (/(^|\.)youtube\.com$/.test(location.hostname) ? location.origin : 'https://www.youtube.com');
 
-  // הכותרת Authorization של גוגל (SAPISIDHASH) – יוטיוב עצמו מחשב אותה בדפדפן מהעוגייה SAPISID.
-  // בלעדיה הבקשה היא "לא מחובר", וסרטון עם הגבלת גיל / פרטי / למנויי ערוץ נכשל גם כשלמשתמש יש גישה.
-  // לכל עוגייה הקידומת שלה, כמו שיוטיוב עצמו שולח: SAPISID→SAPISIDHASH,
-  // __Secure-1PAPISID→SAPISID1PHASH, __Secure-3PAPISID→SAPISID3PHASH.
-  // בכרום של היום לרוב רק עוגיית ה-3P נגישה ל-JS, ולכן חשוב לא לתייג אותה בשם הלא נכון.
-  const SAPISID_COOKIES = [['SAPISID', 'SAPISIDHASH'], ['__Secure-1PAPISID', 'SAPISID1PHASH'], ['__Secure-3PAPISID', 'SAPISID3PHASH']];
-
-  async function dlSha1Hex(text) {
-    const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text));
-    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  async function dlAuthHeaders() {
-    try {
-      if (!crypto?.subtle) return null;
-      const jar = {};
-      for (const part of document.cookie.split(';')) {
-        const i = part.indexOf('=');
-        if (i > 0) jar[part.slice(0, i).trim()] = part.slice(i + 1);
-      }
-      const origin = ytOrigin();
-      const ts = Math.floor(Date.now() / 1000);
-      const parts = [];
-      for (const [name, prefix] of SAPISID_COOKIES) {
-        if (!jar[name]) continue;
-        parts.push(prefix + ' ' + ts + '_' + (await dlSha1Hex(ts + ' ' + jar[name] + ' ' + origin)));
-      }
-      if (!parts.length) return null;
-      return { Authorization: parts.join(' '), 'X-Origin': origin, 'X-Goog-AuthUser': '0' };
-    } catch { return null; }
-  }
-
   // רק בדפי יוטיוב (שם יש עוגיות של החשבון) ורק אם ההגדרה דלוקה – בתוסף ובטמפרמונקי כאחד
   const dlAccountOn = () => S.useAccount !== false && /(^|\.)youtube\.com$/.test(location.hostname);
 
@@ -2221,7 +2189,8 @@
     return document.cookie.split(';').some(c => c.trim().startsWith('LOGIN_INFO='));
   }
 
-  // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר.
+  // auth: שולחים את העוגיות של הדפדפן (הסשן המחובר). כותרת Authorization חתומה אינה בשימוש:
+  // הלקוחות האלה מחזירים עליה 400 (נבדק מול יוטיוב בדפדפן מחובר, 13/10/2026).
   // noVisitor: בלי מזהה המבקר של הדף – לפעמים הוא עצמו זה שמסומן כ"בוט"
   async function dlPlayerRequest(CLIENT, id, signal, auth, noVisitor) {
     const headers = {
@@ -2236,13 +2205,6 @@
     const { headerId, ...client } = CLIENT;
     // הודעות השגיאה של יוטיוב (playabilityStatus.reason) בשפת הממשק
     const hl = typeof uiHebrew === 'function' && !uiHebrew() ? ((document.documentElement.lang || 'en').split('-')[0] || 'en') : 'he';
-    // auth === 'cookies': רק העוגיות של הדפדפן. auth === true: גם כותרת ההרשאה של גוגל,
-    // אם העוגייה שממנה היא מחושבת בכלל נגישה לסקריפט (לא תמיד).
-    if (auth === true) {
-      const extra = await dlAuthHeaders();
-      if (!extra) return null;
-      Object.assign(headers, extra);
-    }
     const r = await fetch(ytOrigin() + '/youtubei/v1/player?prettyPrint=false', {
       method: 'POST', credentials: auth ? 'include' : 'omit', headers, signal,
       body: JSON.stringify({ context: { client: { ...client, hl } }, videoId: id, contentCheckOk: true, racyCheckOk: true }),
@@ -2264,8 +2226,13 @@
       // הסיבה של יוטיוב (פרטי, מוגבל לפי גיל...) – מוצגת כהסבר קצר מתחת ל"ההורדה נכשלה"
       let text = status.reason || dlT('אי אפשר להוריד את הסרטון הזה (', "This video can't be downloaded (") + (status.status || dlT('לא ידוע', 'unknown')) + ')';
       // "צריך להיכנס כדי לאמת שלא מדובר בבוט" / הגבלת גיל: בלי חשבון מחובר בדפדפן אין מה לעשות
-      if (!dlSignedIn() && /LOGIN_REQUIRED|AGE_|CONTENT_CHECK/.test(status.status || '')) {
+      const needsAccount = /LOGIN_REQUIRED|AGE_|CONTENT_CHECK/.test(status.status || '');
+      if (needsAccount && !dlSignedIn()) {
         text += ' – ' + dlT('צריך להיות מחובר לחשבון יוטיוב בדפדפן', 'Sign in to YouTube in the browser first');
+      } else if (needsAccount && /בוט|bot/i.test(status.reason || '')) {
+        // מחוברים וזה עדיין נחסם: הבדיקה הזו תלויה בכתובת ה-IP, לא בסרטון ולא בחשבון
+        text += ' – ' + dlT('יוטיוב חוסם הורדות מהחיבור הזה. כדאי לנסות בלי פרוקסי או מחיבור אחר',
+          'YouTube is blocking downloads from this connection. Try without a proxy, or from another connection');
       }
       const err = new Error(text);
       err.ytReason = true;
@@ -2302,8 +2269,9 @@
     // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
     // לא בודקים כאן אם "מחוברים": זיהוי כזה עלול לטעות, ובקשה אחת עם העוגיות שיש היא זולה.
     // כשאין בכלל עוגיות מתאימות dlPlayerRequest מוותר מיד.
+    // רק עוגיות. כותרת Authorization חתומה (SAPISIDHASH) מוחזרת מהלקוחות האלה כ-400 –
+    // נבדק מול יוטיוב בדפדפן מחובר (13/10/2026), ולכן אין טעם לשלוח אותה.
     if (!data && dlAccountOn()) data = await dlTryClients(id, signal, 'cookies', errs);
-    if (!data && dlAccountOn()) data = await dlTryClients(id, signal, true, errs);
     // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה בדרך כלל במזהה המבקר של הדף (בעיקר כשהדפדפן
     // מחובר לחשבון אבל הבקשה שלנו אנונימית) – הניסיון האחרון הוא בלעדיו לגמרי
     if (!data && errs.yt) data = await dlTryClients(id, signal, false, errs, true);

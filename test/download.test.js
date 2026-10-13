@@ -216,59 +216,42 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   // אין תמונה ואין מזהה – יורד בלי שער, בלי לזרוק
   assert.strictEqual(await ctx.mp3Cover({}), null);
 
-  // סרטון שדורש חשבון: ניסיון ראשון בלי עוגיות נכשל, והשני נשלח עם Authorization של החשבון
+  // סרטון שדורש חשבון: ניסיון ראשון בלי עוגיות נכשל, והשני נשלח עם העוגיות של הדפדפן
   const authCalls = [];
   const stream = { itag: 140, url: 'https://x/a', mimeType: 'audio/mp4; codecs="mp4a.40.2"', contentLength: '1', bitrate: 1 };
-  ctx.S.useAccount = true; // כבוי כברירת מחדל – כאן בודקים את המסלול עצמו
-  ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; SAPISID=secret-value; PREF=x';
+  ctx.S.useAccount = true;
+  ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; SAPISID=secret-value';
   const okFetch = async (url, opts) => {
-    const auth = (opts.headers || {}).Authorization || '';
-    authCalls.push({ auth: auth.split(' ')[0] || 'none', creds: opts.credentials });
-    const body = auth
+    authCalls.push({ creds: opts.credentials, auth: (opts.headers || {}).Authorization || 'none' });
+    const body = opts.credentials === 'include'
       ? { playabilityStatus: { status: 'OK' }, videoDetails: { title: 't', lengthSeconds: '10' }, streamingData: { adaptiveFormats: [stream] } }
       : { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להתחבר' } };
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
   };
   ctx.fetch = okFetch;
   const authInfo = await ctx.fetchStreams('abcdefghijk');
-  assert.strictEqual(authInfo.audio.itag, 140, 'הסרטון ירד בניסיון עם החשבון');
-  assert(authCalls.length >= 2, 'היה ניסיון שני: ' + JSON.stringify(authCalls));
-  assert.deepStrictEqual(authCalls[0], { auth: 'none', creds: 'omit' }, 'הניסיון הראשון בלי חשבון');
-  const withAuth = authCalls.find(c => c.auth === 'SAPISIDHASH');
-  assert(withAuth, 'נשלחה כותרת SAPISIDHASH: ' + JSON.stringify(authCalls));
-  assert.strictEqual(withAuth.creds, 'include', 'עם העוגיות של הדפדפן');
+  assert.strictEqual(authInfo.audio.itag, 140, 'הסרטון ירד בניסיון עם העוגיות');
+  assert.strictEqual(authCalls[0].creds, 'omit', 'הניסיון הראשון בלי עוגיות');
+  assert(authCalls.some(c => c.creds === 'include'), 'נשלח ניסיון עם העוגיות');
+  // כותרת חתומה לא נשלחת: יוטיוב מחזיר עליה 400 מהלקוחות האלה
+  assert(authCalls.every(c => c.auth === 'none'), 'בלי כותרת Authorization');
 
-  // גם בטמפרמונקי (אין הבדל – אותן עוגיות של אותו דף), אבל לא כשההגדרה כבויה
-  authCalls.length = 0;
-  ctx.Platform = { kind: 'userscript' };
-  await ctx.fetchStreams('abcdefghijk');
-  assert(authCalls.some(c => c.auth === 'SAPISIDHASH'), 'גם הטמפרמונקי מנסה עם החשבון');
-  // בלי סשן יוטיוב עדיין מנסים (העוגיות קיימות), אבל ההודעה אומרת למשתמש מה לעשות
-  authCalls.length = 0;
-  const signedCookie = ctx.document.cookie;
-  ctx.document.cookie = 'YSC=1; __Secure-3PAPISID=third-party-value';
-  ctx.fetch = async () => {
-    const body = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להיכנס כדי לאמת שלא מדובר בבוט' } };
-    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
-  };
-  const noLogin = await ctx.fetchStreams('abcdefghijk').then(() => null, e => e);
-  assert(/מחובר לחשבון יוטיוב/.test(noLogin.message), 'ההודעה מכוונת להתחברות: ' + noLogin.message);
-  ctx.document.cookie = signedCookie;
-  ctx.fetch = okFetch;
-
+  // מתג כבוי: אין בכלל ניסיון עם עוגיות
   authCalls.length = 0;
   const savedS = ctx.S;
   ctx.S = { ...ctx.S, useAccount: false };
   await ctx.fetchStreams('abcdefghijk').then(() => assert.fail('היה צריך להיכשל'), () => {});
-  assert(authCalls.every(c => c.auth === 'none'), 'מתג כבוי: בלי חשבון');
+  assert(authCalls.every(c => c.creds === 'omit'), 'מתג כבוי: בלי עוגיות');
   ctx.S = savedS;
-  ctx.Platform = { kind: 'extension' };
 
-  // רק עוגיית ה-3P נגישה ל-JS בכרום – הכותרת חייבת להיות SAPISID3PHASH ולא SAPISIDHASH
-  authCalls.length = 0;
-  ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; __Secure-3PAPISID=third-party-value';
-  await ctx.fetchStreams('abcdefghijk');
-  assert(authCalls.some(c => c.auth === 'SAPISID3PHASH'), 'קידומת לפי שם העוגייה: ' + JSON.stringify(authCalls));
+  // חסימה מהחיבור הזה גם כשמחוברים – ההודעה מסבירה שזה החיבור ולא הסרטון
+  ctx.fetch = async () => {
+    const body = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'צריך להיכנס כדי לאמת שלא מדובר בבוט' } };
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+  };
+  const blocked = await ctx.fetchStreams('abcdefghijk').then(() => null, e => e);
+  assert(/חוסם הורדות מהחיבור הזה/.test(blocked.message), 'הסבר על החיבור: ' + blocked.message);
+  ctx.fetch = okFetch;
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });
