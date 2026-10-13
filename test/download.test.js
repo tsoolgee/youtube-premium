@@ -219,7 +219,7 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   // סרטון שדורש חשבון: ניסיון ראשון בלי עוגיות נכשל, והשני נשלח עם Authorization של החשבון
   const authCalls = [];
   const stream = { itag: 140, url: 'https://x/a', mimeType: 'audio/mp4; codecs="mp4a.40.2"', contentLength: '1', bitrate: 1 };
-  ctx.document.cookie = 'YSC=1; SAPISID=secret-value; PREF=x';
+  ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; SAPISID=secret-value; PREF=x';
   ctx.fetch = async (url, opts) => {
     const auth = (opts.headers || {}).Authorization || '';
     authCalls.push({ auth: auth.split(' ')[0] || 'none', creds: opts.credentials });
@@ -241,6 +241,15 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   ctx.Platform = { kind: 'userscript' };
   await ctx.fetchStreams('abcdefghijk');
   assert(authCalls.some(c => c.auth === 'SAPISIDHASH'), 'גם הטמפרמונקי מנסה עם החשבון');
+  // בלי חשבון מחובר בדפדפן אין בכלל ניסיון עם עוגיות, וההודעה אומרת למשתמש מה לעשות
+  authCalls.length = 0;
+  const signedCookie = ctx.document.cookie;
+  ctx.document.cookie = 'YSC=1; __Secure-3PAPISID=third-party-value';
+  const noLogin = await ctx.fetchStreams('abcdefghijk').then(() => null, e => e);
+  assert(authCalls.every(c => c.auth === 'none'), 'בלי LOGIN_INFO לא שולחים עוגיות');
+  assert(/מחובר לחשבון יוטיוב/.test(noLogin.message), 'ההודעה מכוונת להתחברות: ' + noLogin.message);
+  ctx.document.cookie = signedCookie;
+
   authCalls.length = 0;
   const savedS = ctx.S;
   ctx.S = { ...ctx.S, useAccount: false };
@@ -251,7 +260,7 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
 
   // רק עוגיית ה-3P נגישה ל-JS בכרום – הכותרת חייבת להיות SAPISID3PHASH ולא SAPISIDHASH
   authCalls.length = 0;
-  ctx.document.cookie = 'YSC=1; __Secure-3PAPISID=third-party-value';
+  ctx.document.cookie = 'YSC=1; LOGIN_INFO=yes; __Secure-3PAPISID=third-party-value';
   await ctx.fetchStreams('abcdefghijk');
   assert(authCalls.some(c => c.auth === 'SAPISID3PHASH'), 'קידומת לפי שם העוגייה: ' + JSON.stringify(authCalls));
 

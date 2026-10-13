@@ -4,7 +4,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.0.95";
+  const YTU_VERSION = "0.0.96";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -2048,6 +2048,8 @@
   const CLIENTS = [
     { clientName: 'VISIONOS', clientVersion: '0.1', deviceMake: 'Apple', deviceModel: 'RealityDevice14,1', osName: 'visionOS', osVersion: '1.3.21O771', headerId: '101' },
     { clientName: 'VISIONOS', clientVersion: '1.02', deviceMake: 'Apple', deviceModel: 'RealityDevice17,1', osName: 'visionOS', osVersion: '26.5.23O471', headerId: '101' },
+    // גיבוי כשיוטיוב דורש התחברות מהלקוח של visionOS ("צריך להיכנס כדי לאמת שלא מדובר בבוט")
+    { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82', headerId: '5' },
   ];
   let dlClientIndex = 0; // הלקוח האחרון שעבד – מתחילים ממנו בהורדה הבאה
   // חלקים קטנים: על חיבור מסונן (נטפרי) בקשות וידאו ארוכות נחתכות באקראי באמצע,
@@ -2112,15 +2114,18 @@
   // רק בדפי יוטיוב (שם יש עוגיות של החשבון) ורק אם ההגדרה דלוקה – בתוסף ובטמפרמונקי כאחד
   const dlAccountOn = () => S.useAccount !== false && /(^|\.)youtube\.com$/.test(location.hostname);
 
-  // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר
-  async function dlPlayerRequest(CLIENT, id, signal, auth) {
+  const dlSignedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('LOGIN_INFO='));
+
+  // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר.
+  // noVisitor: בלי מזהה המבקר של הדף – לפעמים הוא עצמו זה שמסומן כ"בוט"
+  async function dlPlayerRequest(CLIENT, id, signal, auth, noVisitor) {
     const headers = {
       'content-type': 'application/json',
       'X-YouTube-Client-Name': CLIENT.headerId,
       'X-YouTube-Client-Version': CLIENT.clientVersion,
     };
     try {
-      const visitor = window.ytcfg?.get?.('VISITOR_DATA');
+      const visitor = noVisitor ? null : window.ytcfg?.get?.('VISITOR_DATA');
       if (visitor) headers['X-Goog-Visitor-Id'] = visitor;
     } catch {}
     const { headerId, ...client } = CLIENT;
@@ -2150,8 +2155,14 @@
     const status = data.playabilityStatus || {};
     if (status.status !== 'OK') {
       // הסיבה של יוטיוב (פרטי, מוגבל לפי גיל...) – מוצגת כהסבר קצר מתחת ל"ההורדה נכשלה"
-      const err = new Error(status.reason || dlT('אי אפשר להוריד את הסרטון הזה (', "This video can't be downloaded (") + (status.status || dlT('לא ידוע', 'unknown')) + ')');
-      if (status.reason) err.ytReason = true;
+      let text = status.reason || dlT('אי אפשר להוריד את הסרטון הזה (', "This video can't be downloaded (") + (status.status || dlT('לא ידוע', 'unknown')) + ')';
+      // "צריך להיכנס כדי לאמת שלא מדובר בבוט" / הגבלת גיל: בלי חשבון מחובר בדפדפן אין מה לעשות
+      if (!dlSignedIn() && /LOGIN_REQUIRED|AGE_|CONTENT_CHECK/.test(status.status || '')) {
+        text += ' – ' + dlT('צריך להיות מחובר לחשבון יוטיוב בדפדפן', 'Sign in to YouTube in the browser first');
+      }
+      const err = new Error(text);
+      err.ytReason = true;
+      err.needsLogin = /LOGIN_REQUIRED|AGE_|CONTENT_CHECK/.test(status.status || '');
       throw err;
     }
     if (!(data.streamingData?.adaptiveFormats || []).some(f => f.url)) {
@@ -2161,11 +2172,11 @@
   }
 
   // עובר על הלקוחות לפי הסדר, החל מזה שעבד בפעם הקודמת, ומחזיר את התשובה הראשונה שהצליחה
-  async function dlTryClients(id, signal, auth, errs) {
+  async function dlTryClients(id, signal, auth, errs, noVisitor) {
     for (let k = 0; k < CLIENTS.length; k++) {
       const i = (dlClientIndex + k) % CLIENTS.length;
       try {
-        const data = await dlPlayerRequest(CLIENTS[i], id, signal, auth);
+        const data = await dlPlayerRequest(CLIENTS[i], id, signal, auth, noVisitor);
         if (data) { dlClientIndex = i; return data; }
       } catch (e) {
         if (signal?.aborted) throw e;
@@ -2182,7 +2193,9 @@
     const errs = {};
     let data = await dlTryClients(id, signal, false, errs);
     // סרטון שדורש חשבון (הגבלת גיל, פרטי, למנויי הערוץ) נכשל בלי עוגיות – מנסים שוב כמשתמש המחובר
-    if (!data && dlAccountOn()) data = await dlTryClients(id, signal, true, errs);
+    if (!data && dlAccountOn() && dlSignedIn()) data = await dlTryClients(id, signal, true, errs);
+    // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה לפעמים במזהה המבקר של הדף – שווה ניסיון בלעדיו
+    if (!data && errs.yt && errs.yt.needsLogin) data = await dlTryClients(id, signal, false, errs, true);
     if (!data) throw errs.yt || errs.block || errs.other;
 
     const formats = (data.streamingData?.adaptiveFormats || [])
