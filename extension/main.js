@@ -4,7 +4,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.1.22";
+  const YTU_VERSION = "0.1.23";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -2153,6 +2153,67 @@
     track.bytes += copy.length;
     if (capArmed.onChange) try { capArmed.onChange(); } catch {}
   }
+
+  // יוטיוב מריץ את ה-MediaSource גם בתוך Worker (MSE in Workers), ואז appendBuffer לא עובר
+  // בדף הראשי בכלל. מזריקים את אותה האזנה לתוך כל Worker שהדף פותח, והוא שולח לנו את המקטעים.
+  const CAP_WORKER_HOOK = `(() => {
+    const isInit = b => { const t = String.fromCharCode(b[4], b[5], b[6], b[7]); return t === 'ftyp' || t === 'moov'; };
+    const types = new WeakMap();
+    try {
+      const addSB = MediaSource.prototype.addSourceBuffer;
+      MediaSource.prototype.addSourceBuffer = function (type) {
+        const sb = addSB.apply(this, arguments);
+        try { types.set(sb, type); } catch (e) {}
+        return sb;
+      };
+      const append = SourceBuffer.prototype.appendBuffer;
+      SourceBuffer.prototype.appendBuffer = function (data) {
+        try {
+          const u = data instanceof Uint8Array ? data : new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength);
+          const copy = u.slice();
+          self.postMessage({ __ytuCapture: 1, type: types.get(this) || '', init: isInit(copy), bytes: copy.buffer }, [copy.buffer]);
+        } catch (e) {}
+        return append.apply(this, arguments);
+      };
+    } catch (e) {}
+  })();`;
+
+  // מפתח מזויף ל-SourceBuffer שחי ב-Worker: אחד לכל סוג מדיה
+  const capWorkerKeys = new Map();
+  function capFromWorker(msg) {
+    const type = msg.type || '';
+    let key = capWorkerKeys.get(type);
+    if (!key) { key = { __ytuType: type }; capWorkerKeys.set(type, key); }
+    capRecord(key, new Uint8Array(msg.bytes));
+  }
+
+  (() => {
+    try {
+      const RealWorker = window.Worker;
+      if (!RealWorker) return;
+      window.Worker = function (url, opts) {
+        let src = String(url);
+        // Worker מסוג module לא יודע importScripts – אותו משאירים כמו שהוא
+        try { if (opts && opts.type === 'module') return new RealWorker(url, opts); } catch {}
+        try {
+          // קוד ההאזנה רץ ראשון, ואחריו הסקריפט המקורי (בכתובת מלאה, כדי שהוא ימשיך לעבוד)
+          const abs = new URL(src, location.href).href;
+          const body = CAP_WORKER_HOOK + String.fromCharCode(10) + 'importScripts(' + JSON.stringify(abs) + ');';
+          const blob = new Blob([body], { type: 'text/javascript' });
+          src = URL.createObjectURL(blob);
+        } catch (e) {}
+        const w = new RealWorker(src, opts);
+        try {
+          w.addEventListener('message', e => {
+            const m = e && e.data;
+            if (m && m.__ytuCapture) { try { capFromWorker(m); } catch {} }
+          });
+        } catch {}
+        return w;
+      };
+      window.Worker.prototype = RealWorker.prototype;
+    } catch {}
+  })();
 
   (() => {
     try {
