@@ -54,7 +54,9 @@ function dlwOpen() {
 function dlwHandOff(id, choice) {
   if (!dlwOn() || !dlwBus) return false;
   if (!dlwOpen()) return false;
-  const job = { id, choice, meta: dlMeta(id), at: Date.now() };
+  // מה שנאסף מהנגן בדף (page-streams.js) לא קיים בחלון – שולחים אותו איתו
+  const page = typeof pageStreamInfo === 'function' ? pageStreamInfo(id) : null;
+  const job = { id, choice, meta: dlMeta(id), info: page || null, at: Date.now() };
   dlwWriteJobs([...dlwReadJobs().filter(j => j.id !== id), job]);
   dlwSend({ ytu: 'job', job });
   dlSnack(dlT('ההורדה עוברת לחלון הנפרד. אפשר לסגור את הלשונית',
@@ -90,6 +92,10 @@ const dlwTaken = new Map(); // id -> { choice, meta }
 function dlwTake(job) {
   if (!job || dlwTaken.has(job.id)) return;
   dlwTaken.set(job.id, job);
+  // כתובות שהגיעו מהדף: מכניסים אותן למטמון כדי שהחלון לא יבקש מיוטיוב מחדש
+  if (job.info && job.info.audio) {
+    try { dlInfo.set(job.id, Promise.resolve(job.info)); dlInfoReady.set(job.id, job.info); } catch {}
+  }
   dlwWriteJobs(dlwReadJobs().filter(j => j.id !== job.id));
   dlwSend({ ytu: 'ack', id: job.id });
   startDownload(job.id, job.choice);

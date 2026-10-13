@@ -169,7 +169,12 @@ async function fetchStreams(id, signal) {
   // "צריך להיכנס כדי לאמת שלא מדובר בבוט" נתלה בדרך כלל במזהה המבקר של הדף (בעיקר כשהדפדפן
   // מחובר לחשבון אבל הבקשה שלנו אנונימית) – הניסיון האחרון הוא בלעדיו לגמרי
   if (!data && errs.yt) data = await dlTryClients(id, signal, false, errs, true);
-  if (!data) throw errs.yt || errs.block || errs.other;
+  // יוטיוב מסרב לנו אבל הסרטון מתנגן בדף: משתמשים בכתובות שהנגן שלו כבר מושך (page-streams.js)
+  if (!data) {
+    const page = typeof pageStreamInfo === 'function' ? pageStreamInfo(id) : null;
+    if (page) return page;
+    throw errs.yt || errs.block || errs.other;
+  }
 
   const formats = (data.streamingData?.adaptiveFormats || [])
     .filter(f => f.url && !f.isDrc && !/[?&]xtags=[^&]*drc/.test(f.url));

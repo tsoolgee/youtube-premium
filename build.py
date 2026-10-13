@@ -27,6 +27,7 @@ BUNDLE = [
     # כקובץ נפרד ומיוחס ב-README (lame.sourceforge.net).
     "vendor/lame.min.js",
     "mp3.js",
+    "features/page-streams.js",
     "features/download.js",
     "features/download-window.js",
     "features/official-button.js",
