@@ -236,15 +236,24 @@ vm.runInContext(src + ';Object.assign(this, { fetchFile, dlProgressLevel, dlCoun
   assert(withAuth, 'נשלחה כותרת SAPISIDHASH: ' + JSON.stringify(authCalls));
   assert.strictEqual(withAuth.creds, 'include', 'עם העוגיות של הדפדפן');
 
-  // בטמפרמונקי אין ניסיון עם חשבון, וגם לא כשההגדרה כבויה
-  for (const [who, patch] of [['userscript', { Platform: { kind: 'userscript' } }], ['off', { S: { ...ctx.S, useAccount: false } }]]) {
-    authCalls.length = 0;
-    const back = { Platform: ctx.Platform, S: ctx.S };
-    Object.assign(ctx, patch);
-    await ctx.fetchStreams('abcdefghijk').then(() => assert.fail('היה צריך להיכשל: ' + who), () => {});
-    assert(authCalls.every(c => c.auth === 'none'), who + ': בלי חשבון');
-    Object.assign(ctx, back);
-  }
+  // גם בטמפרמונקי (אין הבדל – אותן עוגיות של אותו דף), אבל לא כשההגדרה כבויה
+  authCalls.length = 0;
+  ctx.Platform = { kind: 'userscript' };
+  await ctx.fetchStreams('abcdefghijk');
+  assert(authCalls.some(c => c.auth === 'SAPISIDHASH'), 'גם הטמפרמונקי מנסה עם החשבון');
+  authCalls.length = 0;
+  const savedS = ctx.S;
+  ctx.S = { ...ctx.S, useAccount: false };
+  await ctx.fetchStreams('abcdefghijk').then(() => assert.fail('היה צריך להיכשל'), () => {});
+  assert(authCalls.every(c => c.auth === 'none'), 'מתג כבוי: בלי חשבון');
+  ctx.S = savedS;
+  ctx.Platform = { kind: 'extension' };
+
+  // רק עוגיית ה-3P נגישה ל-JS בכרום – הכותרת חייבת להיות SAPISID3PHASH ולא SAPISIDHASH
+  authCalls.length = 0;
+  ctx.document.cookie = 'YSC=1; __Secure-3PAPISID=third-party-value';
+  await ctx.fetchStreams('abcdefghijk');
+  assert(authCalls.some(c => c.auth === 'SAPISID3PHASH'), 'קידומת לפי שם העוגייה: ' + JSON.stringify(authCalls));
 
   console.log('download.test.js: ok');
 })().catch(e => { console.error(e); process.exit(1); });

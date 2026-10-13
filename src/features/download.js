@@ -39,21 +39,38 @@ const ytOrigin = () => (/(^|\.)youtube\.com$/.test(location.hostname) ? location
 
 // הכותרת Authorization של גוגל (SAPISIDHASH) – יוטיוב עצמו מחשב אותה בדפדפן מהעוגייה SAPISID.
 // בלעדיה הבקשה היא "לא מחובר", וסרטון עם הגבלת גיל / פרטי / למנויי ערוץ נכשל גם כשלמשתמש יש גישה.
+// לכל עוגייה הקידומת שלה, כמו שיוטיוב עצמו שולח: SAPISID→SAPISIDHASH,
+// __Secure-1PAPISID→SAPISID1PHASH, __Secure-3PAPISID→SAPISID3PHASH.
+// בכרום של היום לרוב רק עוגיית ה-3P נגישה ל-JS, ולכן חשוב לא לתייג אותה בשם הלא נכון.
+const SAPISID_COOKIES = [['SAPISID', 'SAPISIDHASH'], ['__Secure-1PAPISID', 'SAPISID1PHASH'], ['__Secure-3PAPISID', 'SAPISID3PHASH']];
+
+async function dlSha1Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function dlAuthHeaders() {
   try {
-    const m = document.cookie.match(/(?:^|;\s*)(?:SAPISID|__Secure-3PAPISID)=([^;]+)/);
-    if (!m || !crypto?.subtle) return null;
+    if (!crypto?.subtle) return null;
+    const jar = {};
+    for (const part of document.cookie.split(';')) {
+      const i = part.indexOf('=');
+      if (i > 0) jar[part.slice(0, i).trim()] = part.slice(i + 1);
+    }
     const origin = ytOrigin();
     const ts = Math.floor(Date.now() / 1000);
-    const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ts + ' ' + m[1] + ' ' + origin));
-    const sum = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-    return { Authorization: 'SAPISIDHASH ' + ts + '_' + sum, 'X-Origin': origin, 'X-Goog-AuthUser': '0' };
+    const parts = [];
+    for (const [name, prefix] of SAPISID_COOKIES) {
+      if (!jar[name]) continue;
+      parts.push(prefix + ' ' + ts + '_' + (await dlSha1Hex(ts + ' ' + jar[name] + ' ' + origin)));
+    }
+    if (!parts.length) return null;
+    return { Authorization: parts.join(' '), 'X-Origin': origin, 'X-Goog-AuthUser': '0' };
   } catch { return null; }
 }
 
-// החשבון נכנס לתמונה רק בתוסף (שם הוא "הגרסה המלאה"), רק בדפי יוטיוב ורק אם ההגדרה דלוקה
-const dlAccountOn = () => Platform.kind === 'extension' && S.useAccount !== false
-  && /(^|\.)youtube\.com$/.test(location.hostname);
+// רק בדפי יוטיוב (שם יש עוגיות של החשבון) ורק אם ההגדרה דלוקה – בתוסף ובטמפרמונקי כאחד
+const dlAccountOn = () => S.useAccount !== false && /(^|\.)youtube\.com$/.test(location.hostname);
 
 // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר
 async function dlPlayerRequest(CLIENT, id, signal, auth) {

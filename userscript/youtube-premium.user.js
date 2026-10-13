@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.0.94
+// @version      0.0.95
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -21,7 +21,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.0.94";
+  const YTU_VERSION = "0.0.95";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -81,8 +81,8 @@
       ] },
     { key: 'downloadInRow', type: 'bool', group: 'download', def: true, label: 'הורדה בשורת הכפתורים', desc: 'כפתור "הורדה" תמיד ליד "שיתוף". כבוי – כמו ביוטיוב: במסך צר הוא עובר לתפריט ⋮',
       labelEn: 'Download in the button row', descEn: 'The Download button always sits next to Share. Off – like YouTube: on narrow screens it moves into the ⋮ menu' },
-    { key: 'useAccount', type: 'bool', group: 'download', def: true, label: 'הורדה עם החשבון שלך', desc: 'סרטון עם הגבלת גיל, פרטי או למנויי ערוץ נכשל בהורדה "אנונימית" – ואז התוסף מבקש אותו שוב מיוטיוב עם החשבון שמחובר בדפדפן. בטמפרמונקי לא פעיל',
-      labelEn: 'Download with your account', descEn: 'Age-restricted, private or members-only videos fail as an anonymous request – the extension then asks YouTube again as the account signed in to the browser. Not used in Tampermonkey' },
+    { key: 'useAccount', type: 'bool', group: 'download', def: true, label: 'הורדה עם החשבון שלך', desc: 'סרטון עם הגבלת גיל, פרטי או למנויי ערוץ נכשל בהורדה "אנונימית" – ואז הבקשה נשלחת שוב ליוטיוב עם החשבון שמחובר בדפדפן',
+      labelEn: 'Download with your account', descEn: 'Age-restricted, private or members-only videos fail as an anonymous request – the request is then repeated as the account signed in to the browser' },
     { key: 'downloadWindow', type: 'bool', group: 'download', def: false, label: 'הורדה בחלון נפרד', desc: 'ההורדה עוברת לחלון קטן משלה – אפשר לסגור את הלשונית של הסרטון והיא ממשיכה. את החלון הקטן צריך להשאיר פתוח',
       labelEn: 'Download in a separate window', descEn: 'The download moves to a small window of its own – you can close the video tab and it keeps going. That small window has to stay open' },
     { key: 'h264Only', type: 'bool', group: 'download', def: true, label: 'רק H.264 (נפתח בכל נגן)', desc: 'מסתיר איכויות שיוטיוב נותן רק ב-AV1 (בדרך כלל 1440p ו-4K) – נגן Windows בלי הרחבת AV1 מראה בהן רק שמע',
@@ -2093,21 +2093,38 @@
 
   // הכותרת Authorization של גוגל (SAPISIDHASH) – יוטיוב עצמו מחשב אותה בדפדפן מהעוגייה SAPISID.
   // בלעדיה הבקשה היא "לא מחובר", וסרטון עם הגבלת גיל / פרטי / למנויי ערוץ נכשל גם כשלמשתמש יש גישה.
+  // לכל עוגייה הקידומת שלה, כמו שיוטיוב עצמו שולח: SAPISID→SAPISIDHASH,
+  // __Secure-1PAPISID→SAPISID1PHASH, __Secure-3PAPISID→SAPISID3PHASH.
+  // בכרום של היום לרוב רק עוגיית ה-3P נגישה ל-JS, ולכן חשוב לא לתייג אותה בשם הלא נכון.
+  const SAPISID_COOKIES = [['SAPISID', 'SAPISIDHASH'], ['__Secure-1PAPISID', 'SAPISID1PHASH'], ['__Secure-3PAPISID', 'SAPISID3PHASH']];
+
+  async function dlSha1Hex(text) {
+    const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   async function dlAuthHeaders() {
     try {
-      const m = document.cookie.match(/(?:^|;\s*)(?:SAPISID|__Secure-3PAPISID)=([^;]+)/);
-      if (!m || !crypto?.subtle) return null;
+      if (!crypto?.subtle) return null;
+      const jar = {};
+      for (const part of document.cookie.split(';')) {
+        const i = part.indexOf('=');
+        if (i > 0) jar[part.slice(0, i).trim()] = part.slice(i + 1);
+      }
       const origin = ytOrigin();
       const ts = Math.floor(Date.now() / 1000);
-      const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ts + ' ' + m[1] + ' ' + origin));
-      const sum = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
-      return { Authorization: 'SAPISIDHASH ' + ts + '_' + sum, 'X-Origin': origin, 'X-Goog-AuthUser': '0' };
+      const parts = [];
+      for (const [name, prefix] of SAPISID_COOKIES) {
+        if (!jar[name]) continue;
+        parts.push(prefix + ' ' + ts + '_' + (await dlSha1Hex(ts + ' ' + jar[name] + ' ' + origin)));
+      }
+      if (!parts.length) return null;
+      return { Authorization: parts.join(' '), 'X-Origin': origin, 'X-Goog-AuthUser': '0' };
     } catch { return null; }
   }
 
-  // החשבון נכנס לתמונה רק בתוסף (שם הוא "הגרסה המלאה"), רק בדפי יוטיוב ורק אם ההגדרה דלוקה
-  const dlAccountOn = () => Platform.kind === 'extension' && S.useAccount !== false
-    && /(^|\.)youtube\.com$/.test(location.hostname);
+  // רק בדפי יוטיוב (שם יש עוגיות של החשבון) ורק אם ההגדרה דלוקה – בתוסף ובטמפרמונקי כאחד
+  const dlAccountOn = () => S.useAccount !== false && /(^|\.)youtube\.com$/.test(location.hostname);
 
   // auth: שולחים את העוגיות ואת ה-Authorization של החשבון המחובר
   async function dlPlayerRequest(CLIENT, id, signal, auth) {
