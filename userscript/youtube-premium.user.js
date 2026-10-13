@@ -5,7 +5,7 @@
 // @downloadURL  https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @updateURL    https://raw.githubusercontent.com/tsoolgee/youtube-premium/main/userscript/youtube-premium.user.js
 // @namespace    https://github.com/tsoolgee/youtube-premium
-// @version      0.1.21
+// @version      0.1.22
 // @description  בלי פרסומות, ניגון ברקע, הורדת וידאו ו-MP3 ישירות בדפדפן, חלון צף, איכות מרבית ומהירויות עד פי 4
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -21,7 +21,7 @@
   if (window.__ytuLoaded) return;
   window.__ytuLoaded = true;
 
-  const YTU_VERSION = "0.1.21";
+  const YTU_VERSION = "0.1.22";
   // רשימת ההגדרות – משותפת לדיאלוג ההגדרות של הטמפרמונקי, לחלון התוסף, לגשר ולסקריפט שבדף.
   // type: bool / select.
   const SETTING_GROUPS = [
@@ -2133,6 +2133,103 @@
     };
   }
 
+  // ---------- הורדה מהצפייה ----------
+  // כשיוטיוב מסרב לתת לנו קישורים (בדיקת בוט, SABR בלי PO token) אבל הסרטון כן מתנגן –
+  // הבייטים כבר עוברים בדפדפן: הנגן דוחף אותם ל-MediaSource. אנחנו מאזינים ל-appendBuffer,
+  // אוספים את אותם מקטעים בדיוק (fMP4, מה ש-mux.js יודע למזג) ובונים מהם קובץ.
+  // המחיר: צריך לתת לסרטון להתנגן עד הסוף – אין קיצור דרך, זו הצפייה עצמה.
+
+  const CAP_LIMIT = 2 * 1024 * 1024 * 1024; // גבול זיכרון, שלא נפיל את הלשונית
+  const capTracks = new Map();   // SourceBuffer -> { kind, init, parts, bytes }
+  let capArmed = null;           // { id, started, onChange } – מה אוספים עכשיו
+
+  const capKind = type => (/^audio/i.test(type || '') ? 'audio' : 'video');
+  const capIsInit = b => {
+    // מקטע האתחול מתחיל ב-ftyp/moov; מקטע מדיה ב-moof/styp
+    const tag = String.fromCharCode(...b.subarray(4, 8));
+    return tag === 'ftyp' || tag === 'moov';
+  };
+
+  function capRecord(sb, data) {
+    if (!data || !data.byteLength) return;
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength);
+    let track = capTracks.get(sb);
+    if (!track) {
+      track = { kind: capKind(sb.__ytuType), init: null, parts: [], bytes: 0 };
+      capTracks.set(sb, track);
+    }
+    const copy = bytes.slice();
+    // מקטע האתחול נשמר תמיד (הוא זעיר), המדיה רק כשמקליטים
+    if (capIsInit(copy)) { track.init = copy; return; }
+    if (!capArmed) return;
+    if (track.bytes + copy.length > CAP_LIMIT) return;
+    track.parts.push(copy);
+    track.bytes += copy.length;
+    if (capArmed.onChange) try { capArmed.onChange(); } catch {}
+  }
+
+  (() => {
+    try {
+      const addSB = MediaSource.prototype.addSourceBuffer;
+      MediaSource.prototype.addSourceBuffer = function (type) {
+        const sb = addSB.apply(this, arguments);
+        try { sb.__ytuType = type; } catch {}
+        return sb;
+      };
+      const append = SourceBuffer.prototype.appendBuffer;
+      SourceBuffer.prototype.appendBuffer = function (data) {
+        try { capRecord(this, data); } catch {}
+        return append.apply(this, arguments);
+      };
+    } catch {}
+  })();
+
+  // מתחילים להקליט את הסרטון שמתנגן: מאפסים את מה שנאסף ומנגנים מההתחלה
+  function capStart(id, onChange) {
+    for (const track of capTracks.values()) { track.parts = []; track.bytes = 0; }
+    capArmed = { id, started: Date.now(), onChange };
+    const v = mainVideo() || video();
+    try {
+      const p = activePlayer();
+      if (p && p.seekTo) p.seekTo(0, true);
+      else if (v) v.currentTime = 0;
+      if (v && v.paused) v.play().catch(() => {});
+    } catch {}
+    return capArmed;
+  }
+
+  const capStop = () => { capArmed = null; };
+
+  // כמה מהסרטון כבר נאסף, לפי מה שהנגן הספיק להוריד (buffered), ולא לפי מה שנצפה
+  function capProgress(length) {
+    const v = mainVideo() || video();
+    if (!v || !v.buffered || !v.buffered.length) return 0;
+    const end = v.buffered.end(v.buffered.length - 1);
+    const total = length || v.duration || (v.seekable && v.seekable.length ? v.seekable.end(v.seekable.length - 1) : 0);
+    return total ? Math.min(1, end / total) : 0;
+  }
+
+  const capBytes = () => [...capTracks.values()].reduce((n, t) => n + t.bytes, 0);
+
+  // מחבר את מה שנאסף לקובץ אחד לכל מסלול, בדיוק במבנה ש-fetchFile היה מחזיר
+  function capTrackFile(kind) {
+    const track = [...capTracks.values()].filter(t => t.kind === kind && t.bytes).sort((a, b) => b.bytes - a.bytes)[0];
+    if (!track || !track.init) return null;
+    const out = new Uint8Array(track.init.length + track.bytes);
+    out.set(track.init, 0);
+    let at = track.init.length;
+    for (const part of track.parts) { out.set(part, at); at += part.length; }
+    return out;
+  }
+
+  // הקבצים לבנייה: [וידאו, שמע] או [שמע] – לפי מה שנאסף ומה שביקשו
+  function capFiles(audioOnly) {
+    const audio = capTrackFile('audio');
+    if (!audio) return null;
+    const vid = audioOnly ? null : capTrackFile('video');
+    return vid ? [vid, audio] : [audio];
+  }
+
   // ---------- 6. הורדה ----------
 
   // לקוחות visionOS מחזירים קישורים ישירים בלי חתימה מוצפנת, בלי n ובלי PO token – לפי הסדר, ועוברים לבא כשאחד נחסם.
@@ -2614,7 +2711,9 @@
     const opts = {
       // כמו ytd-video-download-toast-renderer: רק "יורד..." או היחס, ו-KEEP_OPEN (ההכנה נראית רק בטבעת שבכפתור)
       text: total > 1 ? MSG.ratio(Math.min(total, dlSession.done + 1), total) : MSG.downloading() + '...',
-      sub: MSG.keepOpen(),
+      sub: busy.capture
+        ? dlT('מוריד מהצפייה – יש להשאיר את הסרטון מתנגן עד הסוף', 'Recording the playback – let the video play to the end')
+        : MSG.keepOpen(),
       action: dlViewAction(),
       close: true,
       onClose: () => { dlToastClosed = true; },
@@ -3215,11 +3314,72 @@
     else { dlSession.total = 0; dlSession.done = 0; dlToastClosed = false; }
   }
 
+  // ---------- הורדה מהצפייה (capture.js) ----------
+  // המוצא האחרון: יוטיוב לא נותן לנו קישורים, אבל הנגן שלו כן מקבל את הסרטון.
+  // אוספים את מה שהוא מנגן ובונים מזה קובץ – ולכן זה לוקח כזמן ההורדה של הנגן.
+  const CAPTURE_STALL_MS = 12000; // בלי בייטים חדשים כל כך הרבה זמן – נגמר מה שיש
+
+  async function captureDownload(id, choice) {
+    const abort = new AbortController();
+    const busy = dlBusy = { id, choice, abort, percent: 0, capture: true, meta: dlMeta(id) };
+    dlUpdateUnload();
+    refreshDownloadButtons();
+    dlShowProgress(busy);
+    const info = dlInfoNow(id) || {};
+    const v = mainVideo() || video();
+    const length = info.length || (v && v.duration) || 0;
+    capStart(id);
+    try {
+      let shown = 0, lastBytes = 0, stillAt = Date.now();
+      for (;;) {
+        if (abort.signal.aborted) throw new DOMException('aborted', 'AbortError');
+        const done = capProgress(length);
+        busy.percent = Math.min(99, done * 100);
+        if (Date.now() - shown > 300) { shown = Date.now(); refreshDownloadButtons(); dlShowProgress(busy); }
+        if (done >= 0.995) break;
+        // הנגן הפסיק להביא בייטים (סוף הסרטון, או שאין אורך ידוע) – מסתפקים במה שנאסף
+        const now = capBytes();
+        if (now > lastBytes) { lastBytes = now; stillAt = Date.now(); }
+        else if (lastBytes && Date.now() - stillAt > CAPTURE_STALL_MS) break;
+        await sleep(400);
+      }
+      const files = capFiles(dlIsAudio(choice));
+      if (!files) throw new Error(dlT('לא נאסף כלום מהנגן', 'Nothing was captured from the player'));
+      busy.converting = choice === 'mp3';
+      dlShowProgress(busy);
+      let parts = Mux.build(files, length);
+      let ext = files.length > 1 ? '.mp4' : '.m4a', mime = files.length > 1 ? 'video/mp4' : 'audio/mp4';
+      if (choice === 'mp3') {
+        parts = await toMp3(parts, { ...info, title: busy.meta.title, author: busy.meta.author }, frac => {
+          busy.percent = Math.min(99, frac * 100);
+          dlShowProgress(busy);
+        });
+        ext = '.mp3';
+        mime = 'audio/mpeg';
+      }
+      saveFile(parts, safeName(busy.meta.title || id) + ext, mime);
+      dlSetDone(id, true, busy.meta);
+      dlFinish(busy, { text: MSG.downloaded(), action: dlViewAction() });
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      dlFail(busy, id, choice, { text: MSG.failed(), sub: e && e.message });
+    } finally {
+      capStop();
+    }
+  }
+
+  // האם יש בכלל נגן שאפשר להקליט ממנו
+  const captureReady = () => SITE !== 'music' && !!(mainVideo() || video()) && !!(id => id)(videoId());
+
   // כישלון: "ניסיון חוזר" הוא כפתור על ההודעה עצמה (אותה בחירה, בלי לשאול שוב),
   // והלחיצה על הכפתור שבדף פותחת את חלון האיכות הרגיל כדי לבחור משהו אחר
-  function dlFail(busy, id, choice, endToast) {
+  function dlFail(busy, id, choice, endToast, blocked) {
     if (id) dlFailed.set(id, choice);
-    const action = id ? { label: MSG.retry(), run: () => startDownload(id, choice) } : null;
+    // יוטיוב סירב לתת קישורים אבל הסרטון מתנגן – מציעים להוריד מהצפייה עצמה
+    const action = !id ? null
+      : blocked && captureReady() && id === videoId()
+        ? { label: dlT('הורדה מהצפייה', 'Record the playback'), run: () => captureDownload(id, choice) }
+        : { label: MSG.retry(), run: () => startDownload(id, choice) };
     dlFinish(busy, { ...endToast, action: action || endToast.action, error: true });
   }
 
@@ -3291,7 +3451,8 @@
       }
       // "ההורדה נכשלה" כמו ביוטיוב; הסבר קצר רק כשיוטיוב נתן סיבה (סרטון פרטי וכו'), "האחסון מלא" כשאין זיכרון
       const full = e && (e.name === 'RangeError' || e.tooLarge);
-      dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null });
+      dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null },
+        !!(e && (e.needsLogin || e.filtered)));
     }
   }
 

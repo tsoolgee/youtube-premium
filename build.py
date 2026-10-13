@@ -28,6 +28,7 @@ BUNDLE = [
     "vendor/lame.min.js",
     "mp3.js",
     "features/page-streams.js",
+    "features/capture.js",
     "features/download.js",
     "features/download-window.js",
     "features/official-button.js",

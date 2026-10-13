@@ -479,7 +479,9 @@ function dlShowProgress(busy) {
   const opts = {
     // כמו ytd-video-download-toast-renderer: רק "יורד..." או היחס, ו-KEEP_OPEN (ההכנה נראית רק בטבעת שבכפתור)
     text: total > 1 ? MSG.ratio(Math.min(total, dlSession.done + 1), total) : MSG.downloading() + '...',
-    sub: MSG.keepOpen(),
+    sub: busy.capture
+      ? dlT('מוריד מהצפייה – יש להשאיר את הסרטון מתנגן עד הסוף', 'Recording the playback – let the video play to the end')
+      : MSG.keepOpen(),
     action: dlViewAction(),
     close: true,
     onClose: () => { dlToastClosed = true; },
@@ -1080,11 +1082,72 @@ function dlFinish(busy, endToast, cancelled) {
   else { dlSession.total = 0; dlSession.done = 0; dlToastClosed = false; }
 }
 
+// ---------- הורדה מהצפייה (capture.js) ----------
+// המוצא האחרון: יוטיוב לא נותן לנו קישורים, אבל הנגן שלו כן מקבל את הסרטון.
+// אוספים את מה שהוא מנגן ובונים מזה קובץ – ולכן זה לוקח כזמן ההורדה של הנגן.
+const CAPTURE_STALL_MS = 12000; // בלי בייטים חדשים כל כך הרבה זמן – נגמר מה שיש
+
+async function captureDownload(id, choice) {
+  const abort = new AbortController();
+  const busy = dlBusy = { id, choice, abort, percent: 0, capture: true, meta: dlMeta(id) };
+  dlUpdateUnload();
+  refreshDownloadButtons();
+  dlShowProgress(busy);
+  const info = dlInfoNow(id) || {};
+  const v = mainVideo() || video();
+  const length = info.length || (v && v.duration) || 0;
+  capStart(id);
+  try {
+    let shown = 0, lastBytes = 0, stillAt = Date.now();
+    for (;;) {
+      if (abort.signal.aborted) throw new DOMException('aborted', 'AbortError');
+      const done = capProgress(length);
+      busy.percent = Math.min(99, done * 100);
+      if (Date.now() - shown > 300) { shown = Date.now(); refreshDownloadButtons(); dlShowProgress(busy); }
+      if (done >= 0.995) break;
+      // הנגן הפסיק להביא בייטים (סוף הסרטון, או שאין אורך ידוע) – מסתפקים במה שנאסף
+      const now = capBytes();
+      if (now > lastBytes) { lastBytes = now; stillAt = Date.now(); }
+      else if (lastBytes && Date.now() - stillAt > CAPTURE_STALL_MS) break;
+      await sleep(400);
+    }
+    const files = capFiles(dlIsAudio(choice));
+    if (!files) throw new Error(dlT('לא נאסף כלום מהנגן', 'Nothing was captured from the player'));
+    busy.converting = choice === 'mp3';
+    dlShowProgress(busy);
+    let parts = Mux.build(files, length);
+    let ext = files.length > 1 ? '.mp4' : '.m4a', mime = files.length > 1 ? 'video/mp4' : 'audio/mp4';
+    if (choice === 'mp3') {
+      parts = await toMp3(parts, { ...info, title: busy.meta.title, author: busy.meta.author }, frac => {
+        busy.percent = Math.min(99, frac * 100);
+        dlShowProgress(busy);
+      });
+      ext = '.mp3';
+      mime = 'audio/mpeg';
+    }
+    saveFile(parts, safeName(busy.meta.title || id) + ext, mime);
+    dlSetDone(id, true, busy.meta);
+    dlFinish(busy, { text: MSG.downloaded(), action: dlViewAction() });
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    dlFail(busy, id, choice, { text: MSG.failed(), sub: e && e.message });
+  } finally {
+    capStop();
+  }
+}
+
+// האם יש בכלל נגן שאפשר להקליט ממנו
+const captureReady = () => SITE !== 'music' && !!(mainVideo() || video()) && !!(id => id)(videoId());
+
 // כישלון: "ניסיון חוזר" הוא כפתור על ההודעה עצמה (אותה בחירה, בלי לשאול שוב),
 // והלחיצה על הכפתור שבדף פותחת את חלון האיכות הרגיל כדי לבחור משהו אחר
-function dlFail(busy, id, choice, endToast) {
+function dlFail(busy, id, choice, endToast, blocked) {
   if (id) dlFailed.set(id, choice);
-  const action = id ? { label: MSG.retry(), run: () => startDownload(id, choice) } : null;
+  // יוטיוב סירב לתת קישורים אבל הסרטון מתנגן – מציעים להוריד מהצפייה עצמה
+  const action = !id ? null
+    : blocked && captureReady() && id === videoId()
+      ? { label: dlT('הורדה מהצפייה', 'Record the playback'), run: () => captureDownload(id, choice) }
+      : { label: MSG.retry(), run: () => startDownload(id, choice) };
   dlFinish(busy, { ...endToast, action: action || endToast.action, error: true });
 }
 
@@ -1156,7 +1219,8 @@ async function runDownload(id, choice, retried) {
     }
     // "ההורדה נכשלה" כמו ביוטיוב; הסבר קצר רק כשיוטיוב נתן סיבה (סרטון פרטי וכו'), "האחסון מלא" כשאין זיכרון
     const full = e && (e.name === 'RangeError' || e.tooLarge);
-    dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null });
+    dlFail(busy, id, choice, { text: full ? MSG.storageFull() : MSG.failed(), sub: (e && e.ytReason && e.message) || null },
+      !!(e && (e.needsLogin || e.filtered)));
   }
 }
 

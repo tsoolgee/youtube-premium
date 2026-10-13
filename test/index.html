@@ -74,6 +74,7 @@ window.open = (u) => { window.__opened = u; return null; };
 <script>if (!document.documentElement.hasAttribute('dark')) document.body.style.cssText = 'background:#fff;color:#0f0f0f;font-family:Arial';</script>
 <div id="movie_player" class="html5-video-player" style="width:640px;height:360px;position:relative">
   <video class="html5-main-video" src="/test/v.mp4" width="640" muted loop></video>
+  <!-- ?mse=1: הסרטון מוזרם דרך MediaSource כמו בנגן האמיתי, כדי לבדוק "הורדה מהצפייה" -->
   <!-- תפריט ⚙ במבנה האמיתי (16/09/2026): תפריט ראשי + "מהירות הפעלה" עם הסליידר והצ'יפים -->
   <div class="ytp-popup ytp-settings-menu" style="position:absolute;bottom:60px;right:12px;width:300px;background:rgba(28,28,28,.9)">
     <div class="ytp-panel" id="main-panel">
@@ -233,4 +234,52 @@ window.__ad = on => document.getElementById('movie_player').classList.toggle('ad
     <yt-list-item-view-model style="display:block;height:40px"><button style="display:flex;gap:8px;border:0;background:none"><svg width="24" height="24" viewBox="0 0 24 24"><path d="M8 8h8v8H8z"></path></svg><span class="ytListItemViewModelTitle">שיתוף</span></button></yt-list-item-view-model>
   </yt-list-view-model></yt-sheet-view-model>
 </tp-yt-iron-dropdown>
+<script>
+// הזנה דרך MediaSource (?mse=1): init + מקטעים בחתיכות, כמו שהנגן של יוטיוב עושה
+if (window.__Q && window.__Q.mse === '1') (async () => {
+ try {
+  const v = document.querySelector('video');
+  v.removeAttribute('src');
+  v.removeAttribute('loop');
+  const ms = new MediaSource();
+  v.src = URL.createObjectURL(ms);
+  await new Promise(r => ms.addEventListener('sourceopen', r, { once: true }));
+  const vb = ms.addSourceBuffer('video/mp4; codecs="avc1.4d400c"');
+  const ab = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"');
+  const push = (sb, part) => new Promise((res, rej) => {
+    sb.addEventListener('updateend', res, { once: true });
+    sb.addEventListener('error', rej, { once: true });
+    sb.appendBuffer(part);
+  });
+  const feed = async (sb, file) => {
+    const buf = new Uint8Array(await (await fetch(file)).arrayBuffer());
+    let moof = 0;
+    for (let i = 0; i < buf.length - 8; i++) {
+      if (String.fromCharCode(buf[i + 4], buf[i + 5], buf[i + 6], buf[i + 7]) === 'moof') { moof = i; break; }
+    }
+    await push(sb, buf.subarray(0, moof));
+    for (let at = moof; at < buf.length; at += 65536) await push(sb, buf.subarray(at, Math.min(at + 65536, buf.length)));
+  };
+  const feedAll = async () => {
+    await feed(vb, '/test/vfrag.mp4');
+    await feed(ab, '/test/afrag.m4a');
+  };
+  await feedAll();
+  // לא קוראים ל-endOfStream: כמו בנגן האמיתי המקור נשאר פתוח ואפשר להזין שוב אחרי קפיצה
+  try { ms.duration = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0; } catch (e) {}
+  window.__mseReady = true;
+  // כמו הנגן האמיתי: קפיצה להתחלה מביאה את המקטעים שוב
+  let refeeding = false;
+  v.addEventListener('seeking', async () => {
+    if (refeeding || v.currentTime > 0.5) return;
+    refeeding = true;
+    try {
+      await feedAll();
+      window.__refed = (window.__refed || 0) + 1;
+    } catch (e) { window.__mseErr = 'refeed: ' + (e && e.message || e); }
+    refeeding = false;
+  });
+ } catch (e) { window.__mseErr = String(e && e.message || e); }
+})();
+</script>
 </body></html>
